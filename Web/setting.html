@@ -232,6 +232,8 @@
 		});
 
 		// 生成频道配置HTML
+		// 不允许大模型采集的频道(跨服贝/部队/新人):后端已强制忽略,前端禁用勾选并置灰说明
+		const NO_LLM_CHANNELS = ['25','65','66','67','68','69','6A','6B','18','1B'];
 		function generateChannelConfig(channels, type) {
 			let html = '';
 			channels.forEach((channel, index) => {
@@ -271,6 +273,7 @@
 				}
 				// 频道记录设置
 				if (type === 'log') {
+					const noLlm = NO_LLM_CHANNELS.includes(channel.channel); // 跨服贝/部队/新人:禁用大模型采集
 					html = html + `
 						<div class="col-md-4">
 							<div class="custom-control custom-switch">
@@ -283,11 +286,11 @@
 						</div>
 						<div class="col-md-4">
 							<div class="custom-control custom-switch">
-								<input class="custom-control-input" type="checkbox" autocomplete="off"
+								<input class="custom-control-input" type="checkbox" autocomplete="off" disabled title="此频道不支持大模型采集"
 									id="` + channelId + `_llm"
 									data-channel="` + channel.channel + `"
 									data-type="` + type + `">
-								<label class="custom-control-label" for="` + channelId + `_llm">大模型辅助聊天</label>
+								<label class="custom-control-label" for="` + channelId + `_llm">大模型辅助聊天` + (noLlm ? ' <span class="text-muted">(不支持)</span>' : '') + `</label>
 							</div>
 						</div>`;
 				}
@@ -389,7 +392,8 @@
 				if (isLogEnabled) {
 					channelConfig.logEnabled = $input.prop('checked');
 				} else {
-					channelConfig.llm = $input.prop('checked');
+					// 跨服贝/部队/新人等禁用频道:不接受勾选,永远 false(后端同样强制忽略)
+					channelConfig.llm = $input.prop('disabled') ? false : $input.prop('checked');
 				}
 			});
 
@@ -487,7 +491,10 @@
 
 						// 设置日志开关
 						$(`#log_` + channelId + `_logEnabled`).prop('checked', channel.logEnabled || false);
-						$(`#log_` + channelId + `_llm`).prop('checked', channel.llm || false);
+						// 大模型辅助聊天:跨服贝/部队/新人强制关闭(后端也不采集);disabled 的框不参与保存
+						const llmEl = $(`#log_` + channelId + `_llm`);
+						if (llmEl.length && llmEl.prop('disabled')) llmEl.prop('checked', false);
+						else llmEl.prop('checked', channel.llm || false);
 					});
 
 					// 在语音提示设置和聊天记录设置底部添加删除按钮区域

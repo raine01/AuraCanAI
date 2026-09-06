@@ -80,8 +80,15 @@ public class AuraCanAiCore : IDisposable
 	private bool _replyBusy; // 是否有回复请求正在生成中(单飞行)
 	private string _lastTriggerChannel = ""; // 最近触发消息的频道(回复跟随它)
 	private string _lastTriggerAddr = ""; // 最近触发消息的回复地址(悄悄话 /t 用)
+	private string _lastSpeakChannel = ""; // 最近一次普通文本频道(说话/小队/等,非动作类;1C/1D 触发回复时跟随它)
+	private string _lastSpeakAddr = ""; // 最近普通文本频道对应的回复地址
+	private string _lastSpeakerName = ""; // 最近一次和你说话/对你做动作的人(清洗名;多人时回复对象参考)
 	private string _lastLlmEchoContent = ""; // 最近一次实际发出的 LLM 台词(自身回显去重)
 	private DateTime _lastLlmEchoAt = DateTime.MinValue;
+
+	/// <summary>不允许 LLM 采集的频道(前端已禁勾,后端兜底强制忽略):跨服贝(25/65-6B)、部队(18)、新人(1B)。</summary>
+	private static readonly HashSet<string> NoLlmChannels = new()
+	{ "18", "1B", "25", "65", "66", "67", "68", "69", "6A", "6B" };
 	private static bool _noPersonaWarned; // 「未选人设不触发」日志仅提示一次
 
 	public AuraCanAiCore(IDalamudPluginInterface pi, Configuration config, IChatGui chatGui, IClientState clientState,
@@ -365,32 +372,65 @@ public class AuraCanAiCore : IDisposable
 		Tts.Speak(text);
 	}
 
-	/// <summary>LLM 采集 + 回复。文本类频道(说话/悄悄话/小队等):进历史并触发回复(回复跟随来源频道,见契约);
-	/// 情感动作 1C/1D:仅进历史作上下文(让模型知道谁做了什么表情/动作),不触发回复。
+	/// <summary>LLM 采集 + 回复。文本类频道(说话/悄悄话/小队等):进历史并触发回复(回复跟随来源频道);
+	/// 情感动作/原创动作(1C/1D):进历史,若有最近普通文本频道可跟随则触发一次回复(回应动作),否则仅作上下文。
+	/// 限制:跨服贝/部队/新人(NoLlmChannels)不采集;小队频道只采本队成员。
 	/// replyAddress = 对方回复地址(名字@服务器),悄悄话 0D 回复时用。</summary>
 	private void ChatLLMHandler(string channelNo, string cleanName, string text, bool isOwn, string replyAddress)
 	{
+		// 跨服贝/部队/新人:禁止 LLM 采集(前端已禁勾,后端兜底)
+		if (NoLlmChannels.Contains(channelNo)) return;
 		if (!GetChannelSwitchs(channelNo).llm) return;
+		// 小队频道:忽略不在本队的人(他人;系统/自己不过滤)
+		if (channelNo == "0E" && !isOwn && !IsPartySelf(cleanName))
+		{
+			Log($"LLM 采集忽略: 小队频道的 {cleanName} 不在本队");
+			return;
+		}
 		if (isOwn) // 自己发言
 		{
+			// 去重:刚由 LLM 发出的原创/情感动作会由聊天事件捕获回来(own 1C/1D),跳过避免历史重复
+			if ((DateTime.Now - _lastLlmEchoAt).TotalSeconds <= 25 && text == _lastLlmEchoContent)
+			{
+				Log($"LLM 动作自身回显已跳过(历史去重): {text}");
+				return;
+			}
 			if (channelNo == "1C") SendMsg($"({text})", "assistant");
 			else if (channelNo == "1D") SendMsg($"({text.Replace(cleanName, "")})", "assistant");
-			else
-			{
-				// 去重:刚由 LLM 发出的台词会被聊天事件自己捕获回来(own 0A/0C 等),跳过避免历史重复
-				if ((DateTime.Now - _lastLlmEchoAt).TotalSeconds <= 25 && text == _lastLlmEchoContent)
-				{
-					Log($"LLM 台词自身回显已跳过(历史去重): {text}");
-					return;
-				}
-				SendMsg(text, "assistant");
-			}
+			else SendMsg(text, "assistant");
 		}
 		else // 他人发言
 		{
-			if (channelNo == "1C") SendMsg($"[{DateTime.Now:yyyy-MM-dd HH:mm}]({cleanName}{text})", "user", channelNo, "", false); // 原创动作:仅上下文
-			else if (channelNo == "1D") SendMsg($"[{DateTime.Now:yyyy-MM-dd HH:mm}]({text})", "user", channelNo, "", false); // 情感动作:仅上下文
-			else SendMsg($"[{DateTime.Now:yyyy-MM-dd HH:mm}]{cleanName}:{text}", "user", channelNo, replyAddress, true);
+			// 记录最近普通文本频道(说话/悄悄话/小队等,能回话的),供动作(1C/1D)触发回复时跟随
+			// —— 用户口径:动作/表情也该有回应,台词发到最近一次普通聊天频道(说话范围只限已勾采集的频道)
+			string hist;
+			bool isAction = channelNo == "1C" || channelNo == "1D";
+			if (channelNo == "1C") hist = $"[{DateTime.Now:yyyy-MM-dd HH:mm}]({cleanName}{text})"; // 原创动作文本无主语,补发言人
+			else if (channelNo == "1D")
+			{
+				// 情感动作文本通常已含“谁对谁做了什么”;保险起见不含名字时补发言人
+				hist = text.Contains(cleanName)
+					? $"[{DateTime.Now:yyyy-MM-dd HH:mm}]({text})"
+					: $"[{DateTime.Now:yyyy-MM-dd HH:mm}]({cleanName}:{text})";
+			}
+			else { hist = $"[{DateTime.Now:yyyy-MM-dd HH:mm}]{cleanName}:{text}"; }
+
+			if (isAction)
+			{
+				_lastSpeakerName = cleanName; // 最近和你互动的人(做了动作/说了话)
+				// 动作类:有可跟随的普通频道 → 进历史并触发回复(回应动作);没有 → 仅进历史作上下文
+				if (_lastSpeakChannel.Length > 0)
+					SendMsg(hist, "user", _lastSpeakChannel, _lastSpeakAddr, true);
+				else
+					SendMsg(hist, "user", "", "", false); // 尚无普通文本可回(用户还没说过话/没开采集)→ 只作上下文
+			}
+			else
+			{
+				_lastSpeakChannel = channelNo; // 更新最近普通文本频道(只有 llm 采集开启的频道会走到这)
+				_lastSpeakAddr = replyAddress;
+				_lastSpeakerName = cleanName;
+				SendMsg(hist, "user", channelNo, replyAddress, true);
+			}
 		}
 	}
 
@@ -1022,6 +1062,40 @@ public class AuraCanAiCore : IDisposable
 	{
 		var dx = a.X - s.X; var dz = a.Z - s.Z;
 		return MathF.Sqrt(dx * dx + dz * dz);
+	}
+
+	/// <summary>当前小队成员清洗名集合(含自己;通过 GroupManager 成员 EntityId 反查 ObjectTable 名字)。
+	/// 无法解析(未组队/成员都不在场景)时返回空集 → 上层视为“不过滤”(避免误伤)。</summary>
+	private unsafe HashSet<string> GetPartyMemberCleanNames()
+	{
+		var result = new HashSet<string>();
+		try
+		{
+			var gm = FFXIVClientStructs.FFXIV.Client.Game.Group.GroupManager.Instance();
+			if (gm == null || gm->MainGroup.MemberCount <= 0) return result;
+			var partyIds = new HashSet<uint>();
+			var max = Math.Min((int)gm->MainGroup.MemberCount, 8);
+			for (var i = 0; i < max; i++) partyIds.Add(gm->MainGroup.PartyMembers[i].EntityId);
+			var local = _objectTable.LocalPlayer;
+			if (local != null) partyIds.Add(local.EntityId);
+			foreach (var o in _objectTable)
+			{
+				if (o.ObjectKind != ObjectKind.Pc) continue;
+				if (!partyIds.Contains(o.EntityId)) continue;
+				var n = GetCleanName(o.Name.TextValue);
+				if (n.Length > 0) result.Add(n);
+			}
+		}
+		catch { /* 解析失败 = 不过滤 */ }
+		return result;
+	}
+
+	/// <summary>该玩家是否当前小队的“自己人”。不是成员(且能确认有成员名单)返回 false。</summary>
+	private bool IsPartySelf(string cleanName)
+	{
+		var names = GetPartyMemberCleanNames();
+		if (names.Count == 0) return true; // 不在队/名单解析不出 → 不过滤
+		return names.Contains(cleanName) || string.IsNullOrEmpty(cleanName);
 	}
 
 	/// <summary>该座位记录点是否已被别的玩家占。
@@ -1662,7 +1736,8 @@ public class AuraCanAiCore : IDisposable
 			}
 			var actionCall = calls.FirstOrDefault(c => c.name == "rp_body_action");
 			bool hasAction = !string.IsNullOrEmpty(actionCall.name);
-			var infoCalls = calls.Where(c => c.name is "lookup_player" or "list_seats").ToList();
+			// 信息/轻动作工具(查询 或 纯转身看向):face_player 也走回填循环,让模型决定之后说/动什么
+			var infoCalls = calls.Where(c => c.name is "lookup_player" or "list_seats" or "face_player").ToList();
 			if (hasAction && infoCalls.Count == 0)
 			{
 				// 纯动作轮:解析并执行
@@ -1810,17 +1885,60 @@ public class AuraCanAiCore : IDisposable
 			var local = _objectTable.LocalPlayer;
 			switch (toolName)
 			{
+				case "face_player":
+				{
+					// 轻动作:转身看向某玩家(选中目标,不移动)。由模型在“对谁说话就看谁”时主动调用
+					var target = "";
+					try { target = (JObject.Parse(argsJson)["target"]?.ToString() ?? "").Trim(); } catch { }
+					var who = string.IsNullOrEmpty(target) ? GetLatestContactUser() : target;
+					if (string.IsNullOrEmpty(who)) return "face_player:不知道看谁(没有 target 也没有最近接触的人)";
+					return TryLook(who) ? $"已转身看向 {who}" : $"看 {who} 失败(不在当前场景或找不到)";
+				}
 				case "lookup_player":
 				{
 					var name = "";
 					try { name = (JObject.Parse(argsJson)["name"]?.ToString() ?? "").Trim(); } catch { }
-					if (string.IsNullOrEmpty(name)) return "lookup_player 需要 name 参数(玩家名)";
+					// name 空 = 列出当前场景在场的玩家(名字/种族/性别/在线状态/距你方位),给模型“谁在场、长什么样、在哪”
+					if (string.IsNullOrEmpty(name))
+					{
+						if (local == null) return "尚未登录";
+						var sb0 = new System.Text.StringBuilder("在场玩家:");
+						var any0 = false;
+						foreach (var obj in _objectTable)
+						{
+							if (obj.ObjectKind != ObjectKind.Pc || obj is not IPlayerCharacter pc0) continue;
+							if (obj.GameObjectId == local.GameObjectId) continue;
+							var n0 = GetCleanName(obj.Name.TextValue);
+							if (string.IsNullOrWhiteSpace(n0)) continue;
+							var d0 = MathF.Sqrt((obj.Position.X - local.Position.X) * (obj.Position.X - local.Position.X) + (obj.Position.Z - local.Position.Z) * (obj.Position.Z - local.Position.Z));
+							if (d0 > 40f) continue;
+							any0 = true;
+							var race0 = GetRaceName(pc0.Customize.Length > 0 ? pc0.Customize[0] : (byte)0);
+							var gender0 = pc0.Customize.Length > 1 && pc0.Customize[1] == 1 ? "女" : "男";
+							var status0 = GetOnlineStatusName(pc0.OnlineStatus.RowId);
+							var pos0 = GetLookingDirection(obj.Position, local.Position, local.Rotation);
+							sb0.Append($" {n0}({race0}{gender0}{(string.IsNullOrEmpty(status0) ? "" : "," + status0)})在你{pos0}");
+						}
+						if (!any0) return "周围没有其他玩家";
+						sb0.Append("; 想细看某人用 lookup_player 带名字");
+						return sb0.ToString();
+					}
 					var p = FindPlayerByName(name);
 					if (p == null || local == null) return $"{name}:当前场景里看不到(可能已离开或离太远),别当作在你身边";
 					var dx = p.Position.X - local.Position.X; var dz = p.Position.Z - local.Position.Z;
 					var d = MathF.Sqrt(dx * dx + dz * dz);
 					var look = IsLookingAtMe(p.EntityId);
-					return $"{name}:距你约 {d:F0} 米{(look ? ",正在看你" : "")}。" + (d > 5 ? "(在房间另一侧/较远,别按很近处理)" : "");
+					// 合并“附近玩家识别出的种族/性别/职业/在线状态 + 活点地图方位”:让模型知道对方长什么样、在哪个方位
+					string meta = "";
+					if (p is IPlayerCharacter pc)
+					{
+						var race = GetRaceName(pc.Customize.Length > 0 ? pc.Customize[0] : (byte)0);
+						var gender = pc.Customize.Length > 1 && pc.Customize[1] == 1 ? "女" : "男";
+						var status = GetOnlineStatusName(pc.OnlineStatus.RowId);
+						var dir = GetLookingDirection(p.Position, local.Position, local.Rotation);
+						meta = $",{race}{gender}{(string.IsNullOrEmpty(status) ? "" : "," + status)},在你{dir}";
+					}
+					return $"{name}{meta}{(look ? ",正在看你" : "")}。" + (d > 5 ? "(在房间另一侧/较远,别按很近处理)" : "");
 				}
 				case "list_seats":
 				{
@@ -1894,11 +2012,16 @@ public class AuraCanAiCore : IDisposable
 					["action"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "approach", "follow", "leave", "face", "stop", "sit" } },
 					["target"] = new JObject { ["type"] = "string", ["description"] = "approach/follow/leave/face 填玩家名(空=最近接触的人);sit 填座位名/#id,或填玩家名=坐 TA 旁边最近的空座,空=自己最近的空座;不确定哪个座空/近先调 list_seats(near=玩家名)" },
 				}, new[] { "action" }),
-			Func("lookup_player", "查询某个玩家当前离你多远/是否在附近/是否在看你(对方可能已经走开;涉及走向/跟随时若不确定先查这个,别想当然",
+			Func("face_player", "让角色转身看向(面向)某个在场的玩家——多人对话时,你要对谁说话、回应谁,就先 face 他;也可用于表达正在注意/看着某人。动作绝不会移动。",
 				new JObject
 				{
-					["name"] = new JObject { ["type"] = "string", ["description"] = "玩家名" },
-				}, new[] { "name" }),
+					["target"] = new JObject { ["type"] = "string", ["description"] = "要看向的玩家名(空=最近接触/最近和你说话的人)" },
+				}, Array.Empty<string>()),
+			Func("lookup_player", "查看在场玩家:不填 name 列出现在所有在场玩家(名字/种族/性别/在线状态/在你这边的方位);填 name 细查某一位(同上+是否正在看你)。多人时想确认现场有谁、谁长什么样、谁在看你,用它",
+				new JObject
+				{
+					["name"] = new JObject { ["type"] = "string", ["description"] = "可选:玩家名;不填=列出所有在场玩家" },
+				}, Array.Empty<string>()),
 			Func("list_seats", "列出当前房间可坐的座位(是否空/距某玩家多远)。要坐下但不知道哪里有座位,或要坐在某玩家旁边时调用(near=那个玩家名,会按距离列出)",
 				new JObject
 				{
@@ -2114,7 +2237,9 @@ public class AuraCanAiCore : IDisposable
 			// 最近一次移动结果(25 秒内),供模型理解刚才动作的成败
 			if (_lastMoveResult != null && (DateTime.Now - _lastMoveResultAt).TotalSeconds <= 25)
 				sb.Append("(刚结束的移动:").Append(_lastMoveResult).Append(")");
-			sb.Append("要确认某人/自己距离用 lookup_player;想坐哪可 list_seats(可传 near=某人看其旁座位);移动/坐下用 rp_body_action(approach/follow/leave/face/sit/stop);坐某人旁边 = sit 且 target 填那个玩家名(自动找其最近空座)或按 list_seats 的距离挑 #id。距离永远以当前情况为准——对方可能已走开,别以为还在原位。动作绝不写进台词。");
+			sb.Append("要确认某人/自己距离用 lookup_player(不带名字=列在场玩家,含种族/性别/在线状态/在你哪边);想坐哪可 list_seats(可传 near=某人看其旁座位);移动/坐下用 rp_body_action(approach/follow/leave/face/sit/stop);对谁说话/回应谁时可用 face_player 转身看向对方(多人时尤其适用);坐某人旁边 = sit 且 target 填那个玩家名(自动找其最近空座)或按 list_seats 的距离挑 #id。距离永远以当前情况为准——对方可能已走开,别以为还在原位。动作绝不写进台词。");
+			if (!string.IsNullOrEmpty(_lastSpeakerName))
+				sb.Insert(0, $"[刚才 {_lastSpeakerName} 和你说话/互动;若在场,这就是你此刻的主要对话对象] ");
 		}
 		catch (Exception e)
 		{
@@ -2290,6 +2415,9 @@ public class AuraCanAiCore : IDisposable
 	public object SaveConfigJson(string configJson)
 	{
 		_msgSetting = JObject.Parse(configJson).ToObject<MessageSettings>() ?? new MessageSettings();
+		// 跨服贝/部队/新人:强制关 LLM 采集(前端已禁,这里防手改/旧配置残留)
+		foreach (var c in _msgSetting.channelConfig)
+			if (c != null && NoLlmChannels.Contains(c.channel)) c.llm = false;
 		_config.SetMessageSettings(_msgSetting);
 		_config.Save(_pi);
 		Log($"已保存配置数据: {configJson}");
