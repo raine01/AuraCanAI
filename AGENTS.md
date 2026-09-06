@@ -351,6 +351,16 @@ XivChatType 十六进制两位 = 频道号:0A=说话 /s、0E=小队 /p、18=部�
   - 恢复失败(无 invoke)→ 维持原丢弃逻辑(AppendAssistantAndEcho 内 LooksLikeToolLeak 兜底不变)。
   - 单测过 4 种样本:纯动作泄漏/台词+动作泄漏/无引号变体/lookup_player。⚠️ 待实机:新 build 后重测 sit 动作泄漏是否真的执行+补台词,把 xllog 里 "LLM 工具调用泄漏已恢复" 行发我。
 
+## 2026-09-06(下午3)"坐在 X 旁边"只走近不坐的修复(用户实测反馈;需实机重测)
+- **现象**:玩家说"坐在我旁边",角色只是 approach 走近而非 sit(日志 14:34:30:rp_body_action {action:approach,target:奥·乌儿})。
+- **根因**:rp_body_action.sit 的 target 只认 座位名/#id,无法表达"某玩家旁边";list_seats 也只列名字不带位置 → 模型查完(全息显示器/#2..#8)无法判断哪个空座"在奥·乌儿旁边" → 降级 approach。
+- **修复(三层)**:
+  1. ResolveSeatForSittingCore:#N 之后、名字匹配之前新增**玩家名精确匹配**(FindPlayerByName,清洗名):命中 → 同房间、未占用、离该玩家最近、且 ≤6m 的空座(>6m 报"太远"回退让上层决定);
+  2. list_seats 加可选 **near=玩家名** 参数:按到该玩家的距离升序列出(名字距X.Xm(空/有人)),方便模型挑旁边座;不带 near 维持原全部列表。list_seats 工具 schema 同步加 near(非必填);
+  3. 提示更新:rp_body_action.sit target 描述 + BuildBodyActionTools + BuildSceneSnippetCore 注入句,都写明"坐某人旁边 = sit 且 target 填那个玩家名"。
+- /aca 帮助串 seatgo 同步支持"填玩家名=坐 TA 旁边最近空座"(与 /aca seatgo 同解析器,行为/命令/LLM 三入口自动受益)。
+- ⚠️ 待实机:玩家站着说"坐我旁边" → 角色应 sit(走到旁边最近的记录空座坐下)而非 approach;旁边若无记录座位/都太远,应说"没法坐旁边"而不是走近;xllog 看 rp_body_action 的 arguments 是否 action=sit target=玩家名。
+
 ## 2026-09-06(下午)寻路重做:2D 栅格 A* + 前瞻圆弧跟随(替代全部旧避障,待实机验证)
 - **背景**:旧 SideArc 绕行在真实场景反复失败(绕点全在脚下/方向反向/每帧刷日志死循环)。日志实测定位:13:42 改的源码未重新 build,测试跑的是旧 DLL(详见 danmud.log 13:39 build vs 13:42 源)。但即使 build 后旧几何绕行思路仍脆弱 → 整体重写。
 - **新模块 Core/Movement/NavPathPlanner.cs(纯逻辑,无 Dalamud 依赖,已建独立单测工程 D:\navtest 验证过):

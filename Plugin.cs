@@ -74,7 +74,7 @@ public sealed class Plugin : IDalamudPlugin
 
 		CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
 		{
-			HelpMessage = "打开 AuraCanAI 主面板;子指令: /aca list 附近玩家 | /aca map [名字] 活点地图 | /aca note 查看/编辑当前选中玩家的备注 | /aca search [名字] 回忆检索 | /aca look [名字] 看向最后看你的人 | /aca behavior 行为设置 | /aca music 演奏(MIDI) | /aca setting 设置面板 | /aca macro N 触发宏(sN 共享宏) | 移动: /aca face/approach/follow/leave [名字] | /aca move x y z | /aca stop | 场景: /aca seatadd [可选名字] 记录当前坐点 | /aca seatstand [名字|#id] 校准座前站定点 | /aca seatgo [名字|#id|空=最近] 去坐"
+			HelpMessage = "打开 AuraCanAI 主面板;子指令: /aca list 附近玩家 | /aca map [名字] 活点地图 | /aca note 查看/编辑当前选中玩家的备注 | /aca search [名字] 回忆检索 | /aca look [名字] 看向最后看你的人 | /aca behavior 行为设置 | /aca music 演奏(MIDI) | /aca setting 设置面板 | /aca macro N 触发宏(sN 共享宏) | 移动: /aca face/approach/follow/leave [名字] | /aca move x y z | /aca stop | 场景: /aca seatadd [可选名字] 记录当前坐点 | /aca seatstand [名字|#id] 校准座前站定点 | /aca seatgo [名字|#id|玩家名|空=最近] 去坐(填玩家名=坐 TA 旁边最近的空座)"
 		});
 
 		PluginInterface.UiBuilder.Draw += WindowSystem.Draw;

@@ -990,6 +990,26 @@ public class AuraCanAiCore : IDisposable
 			return found;
 		}
 
+		// 玩家名 → 该玩家旁边最近的空座(语义:"坐在 XX 旁边")。按清洗名精确匹配在场玩家。
+		var player = FindPlayerByName(sel);
+		if (player != null)
+		{
+			var tid = _clientState.TerritoryType;
+			var cand = houseSeats
+				.Where(s => s.TerritoryId == tid && !IsSeatOccupied(s))
+				.OrderBy(s => PlaneDist2D(player.Position, s))
+				.FirstOrDefault();
+			if (cand == null) { error = $"{sel} 旁边没有可坐的空座(当前房间的座位都有人/离太远)"; return null; }
+			var dPlayer = PlaneDist2D(player.Position, cand);
+			if (dPlayer > 6f)
+			{
+				// 最近空座都离该玩家 6m 以上,称不上"旁边":回退,让上层决定
+				error = $"{sel} 旁边的空座都太远(最近 {cand.Label()} 也有 {dPlayer:F0}m),无法坐旁边";
+				return null;
+			}
+			return cand;
+		}
+
 		// 名字部分匹配
 		var byName = houseSeats.FirstOrDefault(s => s.Name.Contains(sel, StringComparison.OrdinalIgnoreCase))
 			?? houseSeats.FirstOrDefault(s => s.Label().Contains(sel, StringComparison.OrdinalIgnoreCase));
@@ -1798,14 +1818,34 @@ public class AuraCanAiCore : IDisposable
 				}
 				case "list_seats":
 				{
+					var nearName = "";
+					try { nearName = (JObject.Parse(argsJson)["near"]?.ToString() ?? "").Trim(); } catch { }
+					// 参考中心:给了 near 玩家名 → 以该玩家为中心列距离;否则以自己为中心(不带名字就是本房间全部座位)
+					IGameObject? near = null;
+					if (nearName.Length > 0)
+					{
+						near = FindPlayerByName(nearName);
+						if (near == null) return $"list_seats:附近找不到玩家 {nearName}(可能已离开),换个名字或别传 near";
+					}
 					var house = EnsureSceneState();
 					var tid = _clientState.TerritoryType;
 					var seats = _config.Seats.Where(s => house != null && s.HouseId == house.Id && s.TerritoryId == tid).ToList();
 					if (seats.Count == 0) return "当前房间没有记录的可坐座位(先去 /aca seatadd)";
-					var sb = new System.Text.StringBuilder("当前房间可坐座位:");
-					foreach (var s in seats.OrderBy(s => s.Id))
-						sb.Append($" {s.Label()}{(IsSeatOccupied(s) ? "(有人)" : "(空)")}");
-					sb.Append("; 用 sit 时要填对应的名字或 #id");
+					var sb = new System.Text.StringBuilder();
+					if (near != null)
+					{
+						// 按到该玩家的距离升序,方便模型挑"旁边的座"
+						sb.Append($"{nearName} 附近的座位(按距离):");
+						foreach (var s in seats.OrderBy(s => PlaneDist2D(near.Position, s)))
+							sb.Append($" {s.Label()}距{nearName}{PlaneDist2D(near.Position, s):F1}m{(IsSeatOccupied(s) ? "(有人)" : "(空)")}");
+					}
+					else
+					{
+						sb.Append("当前房间可坐座位:");
+						foreach (var s in seats.OrderBy(s => s.Id))
+							sb.Append($" {s.Label()}{(IsSeatOccupied(s) ? "(有人)" : "(空)")}");
+					}
+					sb.Append("; 坐别人旁边:用 sit 且 target 填那个玩家名(自动找其最近的空座),或按上面距离挑一个 #id/名字");
 					return sb.ToString();
 				}
 				default:
@@ -1842,19 +1882,22 @@ public class AuraCanAiCore : IDisposable
 		}
 		return new JArray
 		{
-			Func("rp_body_action", "让角色做身体动作(走近/跟随/走开/转身面向/停止移动/坐)。approach/follow/leave/face 只能对当前在场的玩家;先想清楚目标离你多远再决定动不动,拿不准用 lookup_player。sit 目标是场景设定里的座位名或 #id(空=最近空座)。动作绝不写进台词。",
+			Func("rp_body_action", "让角色做身体动作(走近/跟随/走开/转身面向/停止移动/坐)。approach/follow/leave/face 只能对当前在场的玩家;先想清楚目标离你多远再决定动不动,拿不准用 lookup_player。sit 目标:座位名 / #id / 玩家名(坐那个玩家旁边最近的空座,如对方邀你坐身边就用玩家名)/ 空=自己最近的空座。动作绝不写进台词。",
 				new JObject
 				{
 					["action"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "approach", "follow", "leave", "face", "stop", "sit" } },
-					["target"] = new JObject { ["type"] = "string", ["description"] = "approach/follow/leave/face 填玩家名(空=最近接触的人);sit 填座位名或 #id(空=最近的空座)" },
+					["target"] = new JObject { ["type"] = "string", ["description"] = "approach/follow/leave/face 填玩家名(空=最近接触的人);sit 填座位名/#id,或填玩家名=坐 TA 旁边最近的空座,空=自己最近的空座;不确定哪个座空/近先调 list_seats(near=玩家名)" },
 				}, new[] { "action" }),
 			Func("lookup_player", "查询某个玩家当前离你多远/是否在附近/是否在看你(对方可能已经走开;涉及走向/跟随时若不确定先查这个,别想当然",
 				new JObject
 				{
 					["name"] = new JObject { ["type"] = "string", ["description"] = "玩家名" },
 				}, new[] { "name" }),
-			Func("list_seats", "列出当前房间可坐的座位(#id/名字/是否空)。要坐下但不知道哪里有座位时调用",
-				new JObject(), Array.Empty<string>()),
+			Func("list_seats", "列出当前房间可坐的座位(是否空/距某玩家多远)。要坐下但不知道哪里有座位,或要坐在某玩家旁边时调用(near=那个玩家名,会按距离列出)",
+				new JObject
+				{
+					["near"] = new JObject { ["type"] = "string", ["description"] = "可选:想坐在哪个玩家旁边,就填其名字;不填则列全部" },
+				}, Array.Empty<string>()),
 		};
 	}
 
@@ -2065,7 +2108,7 @@ public class AuraCanAiCore : IDisposable
 			// 最近一次移动结果(25 秒内),供模型理解刚才动作的成败
 			if (_lastMoveResult != null && (DateTime.Now - _lastMoveResultAt).TotalSeconds <= 25)
 				sb.Append("(刚结束的移动:").Append(_lastMoveResult).Append(")");
-			sb.Append("要确认某人/自己距离用 lookup_player;想坐哪可 list_seats;移动/坐下用 rp_body_action(approach/follow/leave/face/sit/stop)。距离永远以当前情况为准——对方可能已走开,别以为还在原位。动作绝不写进台词。");
+			sb.Append("要确认某人/自己距离用 lookup_player;想坐哪可 list_seats(可传 near=某人看其旁座位);移动/坐下用 rp_body_action(approach/follow/leave/face/sit/stop);坐某人旁边 = sit 且 target 填那个玩家名(自动找其最近空座)或按 list_seats 的距离挑 #id。距离永远以当前情况为准——对方可能已走开,别以为还在原位。动作绝不写进台词。");
 		}
 		catch (Exception e)
 		{
