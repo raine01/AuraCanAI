@@ -1,0 +1,634 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>系统配置中心</title>
+	<link href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/css/bootstrap.min.css" rel="stylesheet">
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+	<style>
+		:root { --primary: #288cff; --secondary: #e8f2ff; }
+		body { font-family: 'Nunito', sans-serif; background-color: #f8f9fa; }
+		.card-header { font-weight: 600; }
+		.toggle-description { font-size: 0.875rem; color: #6c757d; }
+		.loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 9999; color: white; }
+		.hidden { display: none; }
+		.save-btn-container { position: sticky; bottom: 20px; z-index: 1000; margin-bottom: 3rem; }
+		.reset-btn-container { margin-bottom: 1rem; }
+		.save-btn { box-shadow: 0 4px 12px rgba(0,0,0,0.15); padding: 0.75rem 2rem; font-weight: 600; }
+		.custom-alert { position: fixed; top: 80px; right: 20px; z-index: 9999; min-width: 300px; animation: slideInRight 0.3s, slideOutRight 0.3s 2.7s; }
+		@keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+		@keyframes slideOutRight { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+		.role-item { border: 1px solid #e9ecef; border-radius: 0.375rem; padding: 1rem; margin-bottom: 1rem; background: white; }
+		.role-item:hover { border-color: #288cff; }
+	</style>
+</head>
+<body>
+	<!-- 导航栏 -->
+
+	<!-- 加载遮罩层 -->
+	<div id="loadingOverlay" class="loading-overlay">
+		<div class="text-center">
+			<div class="spinner-border" role="status"><span class="sr-only">加载中...</span></div>
+			<div class="mt-2">正在加载配置...</div>
+		</div>
+	</div>
+
+	<!-- 主表单 -->
+	<form id="configForm" method="post">
+		<main class="main">
+			<div class="container py-5">
+				<!-- LLM配置部分 -->
+				<section class="settings-section">
+					<h2 class="heading h3 mb-4 border-bottom pb-2">角色设定</h2>
+
+					<div class="card">
+						<div class="card-body">
+							<!-- 当前角色选择 -->
+							<div class="row mb-4">
+								<div class="col-12">
+									<label class="form-label">
+										<i class="fas fa-user me-1"></i>当前角色
+									</label>
+									<select class="form-control" id="currentRole">
+										<option value="">-- 请选择角色 --</option>
+									</select>
+									<div class="toggle-description mt-1">选择要使用的AI角色</div>
+								</div>
+							</div>
+
+							<!-- 角色管理 -->
+							<div class="row mt-4">
+								<div class="col-12">
+									<div class="d-flex justify-content-between align-items-center mb-3">
+										<label class="form-label mb-0">
+											<i class="fas fa-cogs me-1"></i>角色管理
+										</label>
+										<div>
+											<button type="button" class="btn btn-primary btn-sm me-2" id="addRoleBtn">
+												<i class="fas fa-plus me-1"></i>新增角色
+											</button>
+										</div>
+									</div>
+									<div id="rolesContainer">
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+				</section>
+
+				<!-- 场景设定:可坐位置(手动标定清单 + 小地图) -->
+				<section class="settings-section mt-5">
+					<h2 class="heading h3 mb-4 border-bottom pb-2">场景设定</h2>
+					<div class="card">
+						<div class="card-body">
+							<p class="text-muted small mb-3">供"找个位置坐下"使用。先建/选一个房子页签,再去游戏里坐上去执行 <code>/aca seatadd [可选名字]</code> 记录;名字可在此处补填或不填(留空)。</p>
+							<div id="housesBar" class="d-flex flex-wrap align-items-center mb-2"></div>
+							<div class="d-flex align-items-center mb-2">
+								<div class="text-muted small mr-2">当前房子 <span id="curHouseName" class="badge badge-info">-</span> 地图:蓝点=可坐位,红框=障碍(拖拽添加),黄三角=你</div>
+								<button type="button" id="btnDrawObstacle" class="btn btn-sm btn-outline-secondary ml-auto">✏️ 画障碍</button>
+							</div>
+							<canvas id="seatsMap" class="w-100 border rounded mb-2" style="height:280px;background:#f8f9fa;cursor:crosshair;"></canvas>
+							<div id="obstacleHint" class="text-muted small mb-2 d-none">在画布上按住左键拖出矩形包住家具(松手完成,可给名字或留空)。要画下一条再按一次"✏️ 画障碍"。</div>
+							<div id="seatsEmpty" class="text-muted d-none">这个房子还没记录可坐位置,去坐一下再 /aca seatadd 吧。</div>
+							<div id="seatsContainer"></div>
+							<hr class="my-2">
+							<div id="obstaclesEmpty" class="text-muted d-none">这个房子还没画障碍。切换"✏️ 画障碍"后在画布上框住家具。</div>
+							<div id="obstaclesContainer"></div>
+						</div>
+					</div>
+				</section>
+
+				<div class="save-btn-container text-center">
+					<button type="submit" class="btn btn-success btn-lg save-btn" id="saveConfigBtn">
+						<i class="fas fa-save mr-2"></i>保存所有配置
+					</button>
+				</div>
+
+				<div class="reset-btn-container text-center mb-3">
+					<button type="button" class="btn btn-warning btn-lg" id="resetConfigBtn">
+						<i class="fas fa-undo mr-2"></i>还原默认配置
+					</button>
+					<small class="d-block text-muted mt-2">这将删除所有自定义角色并恢复为默认设置(DeepSeek Key 会保留)</small>
+				</div>
+			</div>
+		</main>
+	</form>
+
+	<!-- 页脚 -->
+
+	<!-- 脚本引入 -->
+	<script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/js/bootstrap.bundle.min.js"></script>
+
+	<script>
+		$(document).ready(function() {
+			$('#loadingOverlay').removeClass('hidden');
+			loadConfigFromServer();
+			loadScene();
+			refreshSeatMap();
+			setInterval(refreshSeatMap, 2000);
+			bindObstacleDrawing();
+
+			$('#configForm').submit(function(e) {
+				e.preventDefault();
+				saveConfigToServer();
+			});
+
+			$('#resetConfigBtn').click(function() {
+				if (confirm('确定要恢复默认配置吗？这将删除所有自定义设置')) {
+					resetConfigToDefault();
+				}
+			});
+
+			$('#currentRole').change(function() {
+				const selectedRoleName = $(this).val();
+				$('#rolesContainer').empty();
+				if (selectedRoleName) {
+					const role = allRoles.find(function(r) { return r.name === selectedRoleName; });
+					generateRoleEditHTML(role);
+				}
+			});
+
+			$('#addRoleBtn').click(function() {
+				$('#rolesContainer').empty();
+				addNewRole();
+			});
+		});
+
+		let allRoles = [];
+		let currentDeepseekKey = ''; // DeepSeek Key 已在卫月设置面板独立管理(重置角色/还原默认不影响),此处仅保存不修改
+
+		function generateRoleEditHTML(role) {
+			let roleEditHTML = `
+			<div class="role-item" data-name="` + role.name + `">
+				<div class="row">
+					<div class="col-md-6 mb-3">
+						<label class="form-label">角色名称</label>
+						<input type="text" class="form-control role-name" value="` + (role.name || '') + `" placeholder="输入角色名称">
+					</div>
+					<div class="col-md-6 mb-3 d-flex align-items-end">
+						<button type="button" class="btn btn-danger btn-sm delete-role-btn w-100">
+							<i class="fas fa-trash me-1"></i>删除角色
+						</button>
+					</div>
+				</div>
+
+				<div class="row mb-3">
+					<div class="col-12">
+						<label class="form-label">角色设定内容</label>
+						<textarea class="form-control role-setting" rows="4" placeholder="输入角色设定内容...">` + (role.setting || '') + `</textarea>
+					</div>
+				</div>
+
+				<div class="row">
+					<div class="col-md-3 mb-3">
+						<label class="form-label">Temperature</label>
+						<input type="number" class="form-control role-temperature" min="0" max="2" step="0.1" value="` + (role.temperature || 1) + `">
+						<small class="text-muted">创造力调节 (0-2)</small>
+					</div>
+					<div class="col-md-3 mb-3">
+						<label class="form-label">Max Tokens</label>
+						<input type="number" class="form-control role-max-tokens" min="0" max="8192" value="` + (role.maxTokens || 4096) + `">
+						<small class="text-muted">最大输出长度 (0-8192)</small>
+					</div>
+					<div class="col-md-3 mb-3">
+						<label class="form-label">Frequency Penalty</label>
+						<input type="number" class="form-control role-frequency-penalty" min="-2" max="2" step="0.1" value="` + (role.frequencyPenalty || 0) + `">
+						<small class="text-muted">重复惩罚 (-2到2)</small>
+					</div>
+					<div class="col-md-3 mb-3">
+						<label class="form-label">Presence Penalty</label>
+						<input type="number" class="form-control role-presence-penalty" min="-2" max="2" step="0.1" value="` + (role.presencePenalty || 0) + `">
+						<small class="text-muted">新话题鼓励 (-2到2)</small>
+					</div>
+				</div>
+
+				<div class="row">
+					<div class="col-12">
+						<label class="form-label">停止词</label>
+						<input type="text" class="form-control role-stop" value="` + (role.stop ? role.stop.join('|') : '') + `" placeholder="用竖线 | 分隔停止词，最多16个">
+						<small class="text-muted">遇到这些词时停止生成</small>
+					</div>
+				</div>
+			</div>`;
+			$('#rolesContainer').append(roleEditHTML);
+
+			$('.delete-role-btn').click(function() {
+				const $roleItem = $(this).closest('.role-item');
+				const roleName = $roleItem.find('.role-name').val() || '未命名角色';
+				if (confirm('确定要删除角色 "' + roleName + '" 吗？')) {
+					allRoles = allRoles.filter(role => role.name !== roleName);
+					$roleItem.remove();
+					$('#currentRole option[value="' + roleName + '"]').remove();
+					showAlert('已删除角色 ' + roleName, 'success');
+				}
+			});
+		}
+
+		// 从服务器加载配置
+		function loadConfigFromServer() {
+			$.ajax({
+				url: '/GetLLMConfig',
+				type: 'POST',
+				success: function(config) {
+					populateFormFromConfig(config);
+					$('#loadingOverlay').addClass('hidden');
+				},
+				error: function(xhr, status, error) {
+					console.error('加载配置失败:', error);
+					$('#loadingOverlay').addClass('hidden');
+					showAlert('加载配置失败: ' + error, 'danger');
+				}
+			});
+		}
+
+		function saveConfigToServer() {
+			$('#loadingOverlay').removeClass('hidden');
+
+			const jsonData = {
+				deepseekKey: currentDeepseekKey,
+				currentRole: $('#currentRole').val(),
+				roles: []
+			};
+
+			const allRolesMap = {};
+			allRoles.forEach(function(role) {
+				allRolesMap[role.name] = {...role};
+			});
+
+			$('.role-item').each(function() {
+				const $role = $(this);
+				const stopValue = $role.find('.role-stop').val();
+				const roleName = $role.find('.role-name').val();
+				const originalName = $role.data('name'); // 获取原始角色名
+
+				const updatedRole = {
+					name: roleName,
+					setting: $role.find('.role-setting').val(),
+					temperature: parseFloat($role.find('.role-temperature').val()) || 1,
+					maxTokens: parseInt($role.find('.role-max-tokens').val()) || 4096,
+					frequencyPenalty: parseFloat($role.find('.role-frequency-penalty').val()) || 0,
+					presencePenalty: parseFloat($role.find('.role-presence-penalty').val()) || 0,
+					stop: stopValue ? stopValue.split('|').filter(function(s) { return s.trim(); }) : []
+				};
+
+				allRolesMap[roleName] = updatedRole;
+
+				if (originalName && originalName !== roleName) {
+					delete allRolesMap[originalName];
+				}
+
+				const $existingOption = $('#currentRole option[value="' + originalName + '"]');
+				if ($existingOption.length > 0) {
+					if (originalName !== roleName) {
+						$existingOption.val(roleName).text(roleName);
+						$role.data('name', roleName); // 更新data-name
+
+						// 如果当前选中的是这个角色，也更新currentRole的值
+						if ($('#currentRole').val() === originalName) {
+							$('#currentRole').val(roleName);
+						}
+					}
+				} else {
+					$('#currentRole').append('<option value="' + roleName + '">' + roleName + '</option>');
+					if (!$('#currentRole').val()) {
+						$('#currentRole').val(roleName);
+					}
+				}
+				jsonData.currentRole = roleName;
+			});
+
+			Object.values(allRolesMap).forEach(function(role) {
+				jsonData.roles.push(role);
+			});
+
+			console.log('保存的JSON数据:', jsonData);
+
+			// 更新全局的allRoles变量
+			allRoles = jsonData.roles;
+
+			$.ajax({
+				url: '/SaveLLMConfig',
+				type: 'POST',
+				contentType: 'application/json',
+				data: JSON.stringify(jsonData),
+				success: function(response) {
+					$('#loadingOverlay').addClass('hidden');
+					showAlert('配置保存成功', 'success');
+				},
+				error: function(xhr, status, error) {
+					$('#loadingOverlay').addClass('hidden');
+					showAlert('配置保存失败: ' + error, 'danger');
+				}
+			});
+		}
+
+		function populateFormFromConfig(config) {
+			try {
+				currentDeepseekKey = config.deepseekKey || '';
+				allRoles = config.roles || [];
+
+				const roleSelect = $('#currentRole');
+				roleSelect.empty().append('<option value="">-- 请选择角色 --</option>');
+				allRoles.forEach(function(role) {
+					roleSelect.append('<option value="' + role.name + '">' + role.name + '</option>');
+				});
+
+				if (config.currentRole) {
+					const role = allRoles.find(function(r) { return r.name === config.currentRole; });
+					if (role) {
+						roleSelect.val(config.currentRole);
+						generateRoleEditHTML(role);
+					} else if (allRoles.length > 0) {
+						// currentRole 指向已删除角色时,兜底选中第一个
+						roleSelect.val(allRoles[0].name);
+						generateRoleEditHTML(allRoles[0]);
+					}
+				}
+				// currentRole 为空 → 保持"请选择角色"(默认不使用人设),不强制选中
+
+				console.log('配置数据已成功填充到表单');
+			} catch (error) {
+				console.error('解析配置数据时出错:', error);
+				showAlert('解析配置数据时出错: ' + error.message, 'danger');
+			}
+		}
+
+		function addNewRole() {
+			const newRole = {
+				name: '新角色',
+				setting: '',
+				temperature: 1,
+				max_tokens: 4096,
+				frequency_penalty: 0,
+				presence_penalty: 0,
+				stop: []
+			};
+
+			generateRoleEditHTML(newRole);
+
+			// 自动选中这个新角色
+			$('#currentRole').val('新角色');
+		}
+
+		function showAlert(message, type) {
+			const alertClass = type === 'success' ? 'alert-success' : 'alert-danger';
+			const alertId = 'alert-' + Date.now();
+			const alertHtml = '<div id="' + alertId + '" class="alert ' + alertClass + ' alert-dismissible fade show custom-alert" role="alert">' + message + '<button type="button" class="close" data-dismiss="alert"><span>&times;</span></button></div>';
+			$('body').append(alertHtml);
+			setTimeout(function() { $('#' + alertId).alert('close'); }, 3000);
+		}
+
+		function resetConfigToDefault() {
+			$('#loadingOverlay').removeClass('hidden');
+			$.ajax({
+				url: '/DeleteLLMConfig',
+				type: 'POST',
+				success: function(response) {
+					$('#loadingOverlay').addClass('hidden');
+					showAlert('已恢复默认配置', 'success');
+					loadConfigFromServer();
+				},
+				error: function(xhr, status, error) {
+					$('#loadingOverlay').addClass('hidden');
+					showAlert('恢复默认配置失败: ' + error, 'danger');
+				}
+			});
+		}
+
+		// ===== 场景设定:房子 + 可坐位 + 障碍矩形 + 小地图 =====
+		let scene = { houses: [], current: 0, seats: [], obstacles: [] };
+		let seatVersion = { count: -1, maxId: -1 };
+		let mapTF = null; // 画布↔世界坐标换算 {s, ox, oz}
+		let drawing = false, dragStart = null, dragCur = null;
+		let mapCache = { seats: [], self: null, obstacles: [] };
+
+		function activeHouse() { return scene.houses.find(h => h.Id === scene.current) || null; }
+		function activeSeats() { return scene.seats.filter(s => s.HouseId === scene.current); }
+		function activeObstacles() { return scene.obstacles.filter(o => o.HouseId === scene.current); }
+
+		function loadScene() {
+			$.ajax({
+				url: '/GetSeats', type: 'POST',
+				success: function(r) {
+					scene.houses = (r.houses) || [];
+					scene.current = (r.current) || 0;
+					scene.seats = (r.seats) || [];
+					scene.obstacles = (r.obstacles) || [];
+					renderHouses(); renderSeats(); renderObstacles(); refreshSeatMap();
+				},
+				error: function(xhr, s, e) { console.error('加载场景设定失败:', e); }
+			});
+		}
+
+		function saveHouses(done) {
+			$.ajax({
+				url: '/SaveHouses', type: 'POST', contentType: 'application/json',
+				data: JSON.stringify({ houses: scene.houses, current: scene.current }),
+				success: function(r) { scene.houses = (r.houses) || []; scene.current = (r.current) || 0; renderHouses(); if (done) done(); },
+				error: function(xhr, s, e) { showAlert('保存房子失败: ' + e, 'danger'); }
+			});
+		}
+
+		function renderHouses() {
+			const bar = $('#housesBar'); bar.empty();
+			scene.houses.forEach(function(h) {
+				const g = $('<div class="btn-group mr-2 mb-1"></div>');
+				const b = $('<button type="button" class="btn btn-sm"></button>')
+					.addClass(h.Id === scene.current ? 'btn-primary' : 'btn-outline-primary')
+					.text(h.Name).on('click', function() { switchHouse(h.Id); });
+				const ren = $('<button type="button" class="btn btn-sm btn-outline-secondary" title="重命名">✎</button>').on('click', function(ev) { ev.stopPropagation(); renameHouse(h); });
+				const del = $('<button type="button" class="btn btn-sm btn-outline-danger" title="删除">✕</button>').on('click', function(ev) { ev.stopPropagation(); deleteHouse(h); });
+				g.append(b).append(ren).append(del); bar.append(g);
+			});
+			bar.append($('<button type="button" class="btn btn-sm btn-outline-success mb-1">+ 新房子</button>').on('click', addHouse));
+			$('#curHouseName').text(activeHouse() ? activeHouse().Name : '未选择');
+		}
+
+		function switchHouse(id) {
+			if (scene.current === id) return;
+			scene.current = id; renderHouses(); renderSeats(); renderObstacles(); refreshSeatMap();
+			$.ajax({ url: '/SetCurrentHouse', type: 'POST', contentType: 'application/json', data: JSON.stringify({ id: id }) });
+		}
+
+		function addHouse() {
+			const name = prompt('新房子名字:'); if (!name || !name.trim()) return;
+			const nextId = scene.houses.reduce(function(m, h) { return Math.max(m, h.Id); }, 0) + 1;
+			scene.houses.push({ Id: nextId, Name: name.trim() }); scene.current = nextId;
+			saveHouses(function() { renderSeats(); renderObstacles(); refreshSeatMap(); showAlert('已新建房子', 'success'); });
+		}
+		function renameHouse(h) { const n = prompt('重命名房子:', h.Name); if (n === null) return; h.Name = (n.trim() || h.Name); saveHouses(); }
+		function deleteHouse(h) {
+			const sn = activeSeats().filter(s => s.HouseId === h.Id).length;
+			const on = scene.obstacles.filter(o => o.HouseId === h.Id).length;
+			if (!confirm('删除房子「' + h.Name + '」' + ((sn + on) > 0 ? ' 及其 ' + sn + ' 座位 / ' + on + ' 障碍' : '') + ' ?')) return;
+			scene.houses = scene.houses.filter(x => x.Id !== h.Id);
+			scene.seats = scene.seats.filter(s => s.HouseId !== h.Id);
+			scene.obstacles = scene.obstacles.filter(o => o.HouseId !== h.Id);
+			if (scene.current === h.Id) scene.current = scene.houses.length ? scene.houses[0].Id : 0;
+			saveHouses(function() { renderSeats(); renderObstacles(); refreshSeatMap(); showAlert('已删除房子', 'success'); });
+		}
+
+		function saveSeats(done) {
+			$.ajax({ url: '/SaveSeats', type: 'POST', contentType: 'application/json',
+				data: JSON.stringify({ houseId: scene.current, seats: activeSeats() }),
+				success: function() { if (done) done(); }, error: function(xhr, s, e) { showAlert('保存失败: ' + e, 'danger'); } });
+		}
+		function saveObstacles(done) {
+			$.ajax({ url: '/SaveObstacles', type: 'POST', contentType: 'application/json',
+				data: JSON.stringify({ houseId: scene.current, obstacles: activeObstacles() }),
+				success: function() { if (done) done(); }, error: function(xhr, s, e) { showAlert('障碍保存失败: ' + e, 'danger'); } });
+		}
+
+		function renderSeats() {
+			const list = activeSeats(); const c = $('#seatsContainer'); c.empty();
+			$('#seatsEmpty').toggleClass('d-none', list.length > 0);
+			list.forEach(function(s) {
+				const row = $('<div class="d-flex align-items-center py-2 border-bottom seat-row"></div>');
+				const idx = $('<span class="text-muted mr-2" style="width:34px"></span>').text('#' + s.Id);
+				const inp = $('<input type="text" class="form-control form-control-sm mr-2" style="max-width:200px" placeholder="">').val(s.Name || '').css('color', s.Name ? '#495057' : '#adb5bd');
+				let ch = false; inp.on('input', function() { ch = true; });
+				inp.on('change', function() { if (!ch) return; ch = false; s.Name = $(this).val().trim(); saveSeats(); });
+				const meta = $('<small class="text-muted flex-grow-1"></small>').text('(' + (+(s.X || 0)).toFixed(1) + ', ' + (+(s.Z || 0)).toFixed(1) + ') 面向 ' + Math.round(((s.Yaw || 0) * 180) / Math.PI) + '°' + (s.HasApproach ? ' ·已校准' : ''));
+				const del = $('<button type="button" class="btn btn-outline-danger btn-sm">删</button>').on('click', function() {
+					if (!confirm('删除座位 (#' + s.Id + ') ?')) return;
+					scene.seats = scene.seats.filter(x => !(x.HouseId === s.HouseId && x.Id === s.Id)); saveSeats(renderSeats);
+				});
+				row.append(idx).append(inp).append(meta).append(del); c.append(row);
+			});
+		}
+
+		function renderObstacles() {
+			const list = activeObstacles(); const c = $('#obstaclesContainer'); c.empty();
+			$('#obstaclesEmpty').toggleClass('d-none', list.length > 0);
+			list.forEach(function(o) {
+				const row = $('<div class="d-flex align-items-center py-2 border-bottom obs-row"></div>');
+				const idx = $('<span class="text-muted mr-2" style="width:34px"></span>').text('#' + o.Id);
+				const inp = $('<input type="text" class="form-control form-control-sm mr-2" style="max-width:200px;color:#c0392b" placeholder="">').val(o.Name || '').css('color', o.Name ? '#c0392b' : '#e0a3a3');
+				let ch = false; inp.on('input', function() { ch = true; });
+				inp.on('change', function() { if (!ch) return; ch = false; o.Name = $(this).val().trim(); saveObstacles(); });
+				const meta = $('<small class="text-muted flex-grow-1"></small>').text('宽 ' + (Math.abs(o.MaxX - o.MinX)).toFixed(1) + ' × 长 ' + (Math.abs(o.MaxZ - o.MinZ)).toFixed(1) + ' m');
+				const del = $('<button type="button" class="btn btn-outline-danger btn-sm">删</button>').on('click', function() {
+					if (!confirm('删除障碍 (#' + o.Id + ') ?')) return;
+					scene.obstacles = scene.obstacles.filter(x => !(x.HouseId === o.HouseId && x.Id === o.Id)); saveObstacles(renderObstacles);
+				});
+				row.append(idx).append(inp).append(meta).append(del); c.append(row);
+			});
+		}
+
+		// ===== 小地图(轮询 2s) =====
+		function refreshSeatMap() {
+			$.ajax({
+				url: '/GetSeatMap', type: 'POST',
+				success: function(r) {
+					mapCache = { seats: (r.seats) || [], self: r.self, obstacles: (r.obstacles) || [] };
+					drawMap();
+					const cnt = (r.houseSeatCount) || 0, mx = (r.houseMaxId) || 0;
+					if (seatVersion.count !== cnt || seatVersion.maxId !== mx) {
+						seatVersion.count = cnt; seatVersion.maxId = mx;
+						if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+						loadScene();
+					}
+				},
+				error: function() { }
+			});
+		}
+
+		function drawMap() {
+			const seats = mapCache.seats, self = mapCache.self, obstacles = mapCache.obstacles;
+			const cv = document.getElementById('seatsMap'); if (!cv) return;
+			const ctx = cv.getContext('2d');
+			const W = cv.clientWidth || 600, H = cv.clientHeight || 280;
+			cv.width = W; cv.height = H; ctx.clearRect(0, 0, W, H);
+			if (seats.length === 0 && obstacles.length === 0 && !self) {
+				ctx.fillStyle = '#adb5bd'; ctx.font = '13px sans-serif'; ctx.fillText('当前房间还没有记录/障碍', 20, 24); return;
+			}
+			let minX = self ? self.x : (seats.length ? seats[0].X : obstacles[0].MinX), maxX = minX, minZ = self ? self.z : (seats.length ? seats[0].Z : obstacles[0].MinZ), maxZ = minZ;
+			[].concat(seats).forEach(function(s) { if (!s) return; minX = Math.min(minX, s.X); maxX = Math.max(maxX, s.X); minZ = Math.min(minZ, s.Z); maxZ = Math.max(maxZ, s.Z); });
+			if (self) { minX = Math.min(minX, self.x); maxX = Math.max(maxX, self.x); minZ = Math.min(minZ, self.z); maxZ = Math.max(maxZ, self.z); }
+			obstacles.forEach(function(o) { minX = Math.min(minX, o.MinX); maxX = Math.max(maxX, o.MaxX); minZ = Math.min(minZ, o.MinZ); maxZ = Math.max(maxZ, o.MaxZ); });
+			if (dragStart && dragCur) { minX = Math.min(minX, dragStart.x, dragCur.x); maxX = Math.max(maxX, dragStart.x, dragCur.x); minZ = Math.min(minZ, dragStart.z, dragCur.z); maxZ = Math.max(maxZ, dragStart.z, dragCur.z); }
+			const padX = (maxX - minX) * 0.12 + 2, padZ = (maxZ - minZ) * 0.12 + 2;
+			minX -= padX; maxX += padX; minZ -= padZ; maxZ += padZ;
+			const s = Math.min(W / (maxX - minX), H / (maxZ - minZ));
+			const ox = (W - s * (maxX - minX)) / 2 - minX * s;
+			const oz = (H - s * (maxZ - minZ)) / 2 - minZ * s;
+			mapTF = { s: s, ox: ox, oz: oz };
+			const PX = function(x) { return x * s + ox; }, PZ = function(z) { return z * s + oz; };
+			// 障碍(半透明红 + 虚线框)
+			obstacles.forEach(function(o) {
+				const x0 = PX(o.MinX), y0 = PZ(o.MinZ), w = (o.MaxX - o.MinX) * s, h = (o.MaxZ - o.MinZ) * s;
+				ctx.fillStyle = 'rgba(220,53,69,0.18)'; ctx.fillRect(x0, y0, w, h);
+				ctx.setLineDash([5, 3]); ctx.strokeStyle = '#dc3545'; ctx.lineWidth = 1.4; ctx.strokeRect(x0, y0, w, h); ctx.setLineDash([]);
+				ctx.fillStyle = '#dc3545'; ctx.font = '11px sans-serif'; ctx.fillText('#' + o.Id, x0 + 3, y0 - 4);
+			});
+			// 座位
+			seats.forEach(function(seat) {
+				const px = PX(seat.X), py = PZ(seat.Z);
+				ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2); ctx.fillStyle = '#2f6fed'; ctx.fill();
+				const dx = Math.sin(seat.Yaw || 0), dz = Math.cos(seat.Yaw || 0);
+				ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + dx * 9, py + dz * 9); ctx.strokeStyle = '#2f6fed'; ctx.lineWidth = 1.2; ctx.stroke();
+				ctx.fillStyle = '#868e96'; ctx.font = '11px sans-serif'; ctx.fillText('#' + seat.Id, px + 7, py - 6);
+			});
+			// 拖拽预览
+			if (dragStart && dragCur) {
+				const x0 = Math.min(PX(dragStart.x), PX(dragCur.x)), y0 = Math.min(PZ(dragStart.z), PZ(dragCur.z));
+				const w = Math.abs(PX(dragCur.x) - PX(dragStart.x)), h = Math.abs(PZ(dragCur.z) - PZ(dragStart.z));
+				ctx.fillStyle = 'rgba(40,167,69,0.20)'; ctx.fillRect(x0, y0, w, h);
+				ctx.strokeStyle = '#28a745'; ctx.lineWidth = 1.6; ctx.strokeRect(x0, y0, w, h);
+			}
+			// 自己
+			if (self) {
+				const px = PX(self.x), py = PZ(self.z);
+				const dx = Math.sin(self.yaw || 0), dz = Math.cos(self.yaw || 0);
+				ctx.beginPath(); ctx.moveTo(px, py - 8); ctx.lineTo(px + 6, py + 6); ctx.lineTo(px - 6, py + 6); ctx.closePath();
+				ctx.fillStyle = '#f5a623'; ctx.fill();
+				ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + dx * 10, py + dz * 10); ctx.strokeStyle = '#f5a623'; ctx.lineWidth = 1.6; ctx.stroke();
+			}
+		}
+
+		// ===== 障碍拖拽画矩形 =====
+		function pxToWorld(ev) {
+			const cv = document.getElementById('seatsMap'); if (!cv || !mapTF) return null;
+			const rect = cv.getBoundingClientRect();
+			const px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+			return { x: (px - mapTF.ox) / mapTF.s, z: (py - mapTF.oz) / mapTF.s };
+		}
+
+		function bindObstacleDrawing() {
+			const cv = document.getElementById('seatsMap'); if (!cv) return;
+			cv.addEventListener('mousedown', function(ev) {
+				if (!drawing) return;
+				const w = pxToWorld(ev); if (!w) return;
+				dragStart = w; dragCur = w; drawMap();
+			});
+			cv.addEventListener('mousemove', function(ev) {
+				if (!drawing || !dragStart) return;
+				dragCur = pxToWorld(ev); drawMap();
+			});
+			cv.addEventListener('mouseup', function() {
+				if (!drawing || !dragStart || !dragCur) return;
+				const a = dragStart, b = dragCur;
+				dragStart = null; dragCur = null;
+				drawMap();
+				const w = Math.abs(b.x - a.x), h = Math.abs(b.z - a.z);
+				if (w < 0.3 || h < 0.3) { showAlert('太小了,再画大一点(≥0.3m)', 'warning'); return; }
+				const name = prompt('这条障碍叫什么?(可留空)');
+				const obs = scene.obstacles.filter(o => o.HouseId === scene.current);
+				const nextId = obs.reduce(function(m, o) { return Math.max(m, o.Id); }, 0) + 1;
+				scene.obstacles.push({ Id: nextId, HouseId: scene.current, Name: (name || '').trim(), MinX: Math.min(a.x, b.x), MinZ: Math.min(a.z, b.z), MaxX: Math.max(a.x, b.x), MaxZ: Math.max(a.z, b.z) });
+				saveObstacles(function() { renderObstacles(); });
+			});
+			$('#btnDrawObstacle').on('click', function() {
+				drawing = !drawing;
+				$(this).toggleClass('btn-success', drawing).toggleClass('btn-outline-secondary', !drawing);
+				$('#obstacleHint').toggleClass('d-none', !drawing);
+				cv.style.cursor = drawing ? 'crosshair' : 'default';
+			});
+		}
+	</script>
+</body>
+</html>

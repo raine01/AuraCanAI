@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Version>0.1.0.0</Version>
+    <PackageProjectUrl>https://github.com/raine01/ff14AuraCan</PackageProjectUrl>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- 国服卫月(XIVLauncherCN)开发引用路径 -->
+    <DalamudLibPath>$(AppData)\XIVLauncherCN\addon\Hooks\dev\</DalamudLibPath>
+    <!-- SDK 在导入时已固化国际服路径,这里同时追加国服路径到搜索路径 -->
+    <AssemblySearchPaths>$(AssemblySearchPaths);$(AppData)\XIVLauncherCN\addon\Hooks\dev\</AssemblySearchPaths>
+    <AssemblyName>AuraCanAI.Dalamud</AssemblyName>
+    <RootNamespace>AuraCanAI.Dalamud</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- TTS:Windows SAPI -->
+    <PackageReference Include="Melanchall.DryWetMidi" Version="6.1.3" />
+    <PackageReference Include="System.Speech" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 参考源码目录(vnavmesh 等),不参与编译 -->
+    <Compile Remove="_ref/**" />
+    <None Remove="_ref/**" />
+    <Content Remove="_ref/**" />
+    <EmbeddedResource Remove="_ref/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- DryWetMidi 原生库(高精度时钟)默认被复制到 netX.0-windows 子目录,插件从输出根加载需显式复制到根 -->
+    <None Include="$(NuGetPackageRoot)melanchall.drywetmidi\6.1.3\build\Melanchall_DryWetMidi_Native*.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>%(Filename)%(Extension)</Link>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Web\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </Content>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>AuraCanAI - 歌单</title>
+	<link href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/css/bootstrap.min.css" rel="stylesheet">
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+	<style>
+		body { background: #f8f9fa; }
+		.main { padding-top: 1.2rem; margin-top: 3.2rem; padding-bottom: 2rem; }
+		.card { margin-bottom: 14px; }
+		.card-header { font-weight: 600; font-size: .95rem; }
+		.pl-item { border-bottom: 1px solid #eee; padding: 8px 4px; }
+		.pl-item:last-child { border-bottom: none; }
+		.pl-name { font-weight: 500; }
+		.track-item { border: 1px solid #e3e6ea; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; background: #fff; }
+		.track-item.active { border-color: #007bff; background: #eef6ff; }
+		.track-item.sel { border-color: #28a745; background: #e8f9e8; } /* 当前演奏/将演奏 */
+		.param-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+		.param-row label { margin: 0; font-size: .8rem; color: #666; }
+		.progress { height: 8px; }
+		.small-input { width: 90px !important; display: inline-block !important; }
+		.btn-sm-ico { padding: 1px 6px; font-size: .8rem; }
+		.now-playing { font-size: .9rem; }
+		.mode-group label { font-size: .85rem; margin-right: 10px; }
+		.ready-ok { color: #28a745; }
+		.ready-warn { color: #e0a800; }
+		.ready-bad { color: #dc3545; }
+	</style>
+</head>
+<body>
+	<!-- 导航栏 -->
+
+	<main class="main">
+		<div class="container" style="max-width: 1000px;">
+
+			<!-- 播放控制 -->
+			<div class="card">
+				<div class="card-header"><i class="fas fa-play-circle mr-1"></i> 播放控制</div>
+				<div class="card-body">
+					<div class="mode-group mb-2">
+						<label><input type="radio" name="mode" value="Single"> 单曲</label>
+						<label><input type="radio" name="mode" value="Loop"> 循环</label>
+						<label><input type="radio" name="mode" value="List" checked> 列表</label>
+						<label><input type="radio" name="mode" value="Random"> 随机</label>
+					</div>
+					<div class="d-flex flex-wrap align-items-center">
+						<button class="btn btn-primary btn-sm mr-1" id="playToggleBtn" onclick="togglePlay()"><i class="fas fa-play mr-1"></i>播放</button>
+						<button class="btn btn-outline-secondary btn-sm mr-1" onclick="ctl('prev')"><i class="fas fa-step-backward mr-1"></i></button>
+						<button class="btn btn-outline-secondary btn-sm mr-1" onclick="ctl('next')"><i class="fas fa-step-forward mr-1"></i></button>
+						<span class="now-playing ml-3" id="nowPlaying">未播放</span>
+						<span class="ml-auto" id="performStatus"></span>
+					</div>
+					<div class="mt-2 d-flex align-items-center">
+						<span class="text-muted small mr-2" id="playTime">0:00 / 0:00</span>
+						<input type="range" id="playProgress" class="flex-fill" min="0" max="1000" value="0" step="1" oninput="onSeekInput(this)" onchange="onSeekChange(this)">
+					</div>
+					<div class="text-danger small mt-1" id="playError"></div>
+				</div>
+			</div>
+
+			<div class="row">
+				<!-- 歌单列表 -->
+				<div class="col-md-4">
+					<div class="card">
+						<div class="card-header"><i class="fas fa-list mr-1"></i> 歌单</div>
+						<div class="card-body p-0">
+							<div id="playlistList" class="list-group list-group-flush" style="max-height:340px;overflow-y:auto"></div>
+						</div>
+						<div class="card-footer d-flex">
+							<input type="text" id="newPlName" class="form-control form-control-sm mr-1" placeholder="新歌单名" maxlength="30">
+							<button class="btn btn-sm btn-success" onclick="newPlaylist()"><i class="fas fa-plus"></i></button>
+						</div>
+					</div>
+				</div>
+
+				<!-- 曲目管理 -->
+				<div class="col-md-8">
+					<div class="card">
+						<div class="card-header d-flex justify-content-between align-items-center">
+							<span><i class="fas fa-music mr-1"></i> <span id="curPlName">曲目</span></span>
+							<span>
+								<button class="btn btn-sm btn-outline-primary mr-1" onclick="openAddMidi()"><i class="fas fa-plus mr-1"></i>添加</button>
+								<button class="btn btn-sm btn-outline-secondary mr-1" onclick="renamePlaylist()"><i class="fas fa-edit mr-1"></i>改名</button>
+								<button class="btn btn-sm btn-danger" onclick="deletePlaylist()"><i class="fas fa-trash mr-1"></i>删除歌单</button>
+							</span>
+						</div>
+						<div class="card-body p-0" style="max-height:420px;overflow-y:auto">
+							<div id="trackList" class="p-2"></div>
+							<div id="emptyTracks" class="text-muted text-center p-3 d-none">歌单为空,点「添加」从电脑选 MIDI 文件</div>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<!-- 添加曲目(折叠) -->
+			<!-- 添加MIDI 模态框(目录浏览 + 点击即加入) -->
+			<div class="modal fade" id="addMidiModal" tabindex="-1">
+				<div class="modal-dialog modal-dialog-scrollable">
+					<div class="modal-content">
+						<div class="modal-header">
+							<h5 class="modal-title"><i class="fas fa-folder-open mr-2"></i>添加MIDI</h5>
+							<button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+						</div>
+						<div class="modal-body">
+							<div class="mb-2">添加到歌单: <strong id="addTargetPl">-</strong></div>
+							<div class="text-muted small mb-2">浏览电脑目录,点击 MIDI 文件即加入歌单(可连续添加;选择的是电脑上的文件)。</div>
+							<div class="text-muted small mb-1" id="dirCurrentPath">...</div>
+							<div id="dirList" style="max-height:50vh;overflow-y:auto;border:1px solid #e9ecef;border-radius:4px;"></div>
+							<div class="text-success small mt-1" id="addHint"></div>
+						</div>
+						<div class="modal-footer">
+							<button type="button" class="btn btn-primary" data-dismiss="modal">完成</button>
+						</div>
+					</div>
+				</div>
+			</div>
+
+		</div>
+	</main>
+
+	<!-- 页脚 -->
+
+	<script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/js/bootstrap.bundle.min.js"></script>
+	<script>
+		var playlists = [];
+		var curPl = -1;
+		var midiDirCache = localStorage.getItem('midiDir') || '';
+		var saveTimer = null; // 歌单保存防抖
+
+		// ---------- HTTP ----------
+		function api(name, body, cb) {
+			$.ajax({
+				url: '/' + name, type: 'POST',
+				contentType: 'application/json',
+				data: body ? JSON.stringify(body) : '{}',
+				success: function (r) { cb && cb(r); },
+				error: function (xhr) { console.error(name, xhr.responseText); }
+			});
+		}
+
+		// ---------- 歌单 ----------
+		function loadPlaylists() {
+			api('GetPlaylists', null, function (r) {
+				playlists = r.playlists || [];
+				if (curPl >= playlists.length) curPl = -1;
+				if (curPl < 0 && playlists.length > 0) curPl = 0;
+				selectedIdx = 0;
+				renderPlaylistList();
+				renderTracks();
+			});
+		}
+		function savePlaylists() {
+			// 防抖:连续修改(参数/排序/增删)只发最后一次,避免频繁全量保存
+			clearTimeout(saveTimer);
+			saveTimer = setTimeout(function () { api('SavePlaylists', { playlists: playlists }); }, 250);
+		}
+
+		function renderPlaylistList() {
+			var h = '';
+			playlists.forEach(function (p, i) {
+				h += '<a href="#" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center ' + (i === curPl ? 'active' : '') + '" onclick="switchPl(' + i + ');return false;">'
+					+ '<span>' + esc(p.Name) + '</span><span class="badge badge-light badge-pill">' + (p.Items ? p.Items.length : 0) + '</span></a>';
+			});
+			$('#playlistList').html(h || '<div class="text-muted p-3">暂无歌单,下方新建</div>');
+		}
+		function switchPl(i) { curPl = i; selectedIdx = 0; renderPlaylistList(); renderTracks(); }
+		function newPlaylist() {
+			var n = $('#newPlName').val().trim();
+			if (!n) return;
+			playlists.push({ Name: n, Items: [] });
+			curPl = playlists.length - 1;
+			$('#newPlName').val('');
+			savePlaylists(); renderPlaylistList(); renderTracks();
+		}
+		function deletePlaylist() {
+			if (curPl < 0) return;
+			if (!confirm('删除歌单「' + playlists[curPl].Name + '」?')) return;
+			playlists.splice(curPl, 1);
+			if (playlists.length === 0) {
+				// 删除最后一个歌单:立即补一个默认歌单
+				playlists.push({ Name: '默认歌单', Items: [] });
+			}
+			curPl = playlists.length - 1;
+			savePlaylists(); renderPlaylistList(); renderTracks();
+		}
+		function renamePlaylist() {
+			var n = prompt('重命名歌单:', playlists[curPl].Name);
+			if (!n) return;
+			playlists[curPl].Name = n.trim();
+			savePlaylists(); renderPlaylistList();
+		}
+
+		// ---------- 曲目 ----------
+		function cur() { return playlists[curPl]; }
+
+		// 当前选中曲目(将演奏/正在演奏);播放中由轮询同步到后端当前曲目
+		var selectedIdx = 0;
+
+		// 点击曲目:标记为将演奏(绿色);播放中则先停止,等点播放从这首开始
+		function selectTrack(i) {
+			if (!cur() || i < 0 || i >= cur().Items.length) return;
+			selectedIdx = i;
+			if (playState.playing || playState.paused) ctl('stop');
+			renderTracks();
+		}
+
+		// 「将演奏」曲目名(播放控制区显示)
+		function willPlayName() {
+			if (curPl < 0 || !cur() || cur().Items.length === 0) return '未选择';
+			var it = cur().Items[selectedIdx];
+			return it ? ((selectedIdx + 1) + '. ' + it.FileName) : '未选择';
+		}
+
+		function renderTracks() {
+			if (curPl < 0 || !playlists[curPl]) {
+				$('#curPlName').text('曲目');
+				$('#trackList').html(''); $('#emptyTracks').removeClass('d-none');
+				return;
+			}
+			var p = playlists[curPl];
+			$('#curPlName').text(p.Name + ' (' + p.Items.length + ' 首)');
+			// 曲目若尚未取得轨道列表,先异步获取再重渲染(避免下拉没数据;单人也要选轨/整曲,故所有曲目都拉)
+			var needTracks = p.Items.some(function (it) { return !tracksCache[it.Path]; });
+			if (needTracks) {
+				p.Items.forEach(function (it) {
+					if (!tracksCache[it.Path]) fetchTracks(it.Path);
+				});
+				$('#trackList').html('<div class="p-3 text-center text-muted">加载轨道信息...</div>');
+				return; // fetchTracks 完成后会重调 renderTracks
+			}
+			var h = '';
+			p.Items.forEach(function (it, i) {
+				h += '<div class="track-item' + (i === selectedIdx ? ' sel' : '') + '" onclick="selectTrack(' + i + ')">'
+					+ '<div class="d-flex justify-content-between align-items-center">'
+					+ '<span class="pl-name">' + (i + 1) + '. ' + esc(it.FileName) + '</span>'
+					+ '<span>'
+					+ '<button class="btn btn-outline-secondary btn-sm-ico mr-1" title="上移" onclick="event.stopPropagation();moveItem(' + i + ',-1)"><i class="fas fa-arrow-up"></i></button>'
+					+ '<button class="btn btn-outline-secondary btn-sm-ico mr-1" title="下移" onclick="event.stopPropagation();moveItem(' + i + ',1)"><i class="fas fa-arrow-down"></i></button>'
+					+ '<button class="btn btn-outline-danger btn-sm-ico" title="删除" onclick="event.stopPropagation();delItem(' + i + ')"><i class="fas fa-trash"></i></button>'
+					+ '</span></div>'
+					+ '<div class="param-row mt-1" onclick="event.stopPropagation()">'
+					+ '<label><input type="checkbox" ' + (it.Analysis ? 'checked' : '') + ' onchange="setP(' + i + ',\'Analysis\',this.checked)"> 预处理</label>'
+					+ '<label><input type="checkbox" ' + (it.Chord ? 'checked' : '') + ' onchange="setP(' + i + ',\'Chord\',this.checked)"> 拆解</label>'
+					+ '<label title="双开合奏:主轨自己弹、辅轨注入辅端窗口;单开请勿勾选"><input type="checkbox" ' + (it.Ensemble ? 'checked' : '') + ' onchange="setP(' + i + ',\'Ensemble\',this.checked)"> 合奏</label>'
+					+ (tracksCache[it.Path] ? renderTrackSel(i, 'MainTrack', it.MainTrack, it.Ensemble ? '主轨' : '演奏', tracksCache[it.Path], true)
+						+ (it.Ensemble ? renderTrackSel(i, 'SlaveTrack', it.SlaveTrack, '辅轨', tracksCache[it.Path], false) : '') : '')
+					+ '<label>速度 <input type="number" step="0.1" min="0.5" max="2" class="form-control form-control-sm small-input" value="' + (it.Speed || 1.0) + '" onchange="setP(' + i + ',\'Speed\',parseFloat(this.value))"></label>'
+					+ '<label>移调 <input type="number" step="1" min="-24" max="24" class="form-control form-control-sm small-input" value="' + (it.Transpose || 0) + '" onchange="setP(' + i + ',\'Transpose\',parseInt(this.value))"></label>'
+					+ '</div></div>';
+			});
+			$('#trackList').html(h);
+			$('#emptyTracks').toggleClass('d-none', p.Items.length > 0);
+		}
+		// 轨道列表缓存(MIDI 路径 → 轨道数组)
+		var tracksCache = {};
+		function fetchTracks(path) {
+			api('GetMidiTracks', { path: path }, function (r) {
+				if (r.result === 'success') { tracksCache[path] = r.tracks || []; renderTracks(); }
+			});
+		}
+		// 轨道下拉:主轨(单人/合奏主轨)含「全部轨道(整曲)」,辅轨不含;主轨默认自动(轨道1),辅轨默认自动(轨道2,仅一轨时辅端不演奏)
+		function renderTrackSel(i, key, val, label, tracks, isMain) {
+			if (!isMain && tracks.length <= 1)
+				return '<label>辅轨 <span class="text-muted small">(仅一条轨道,辅端不演奏)</span></label>';
+			val = (val === undefined || val === null) ? -1 : val;
+			var opts = '';
+			if (isMain) opts += '<option value="-2"' + (val === -2 ? ' selected' : '') + '>全部轨道(整曲)</option>';
+			opts += '<option value="-1"' + (val === -1 ? ' selected' : '') + '>' + (isMain ? '自动(轨道1)' : '自动(轨道2)') + '</option>';
+			tracks.forEach(function (t, idx) {
+				opts += '<option value="' + idx + '"' + (val === idx ? ' selected' : '') + '>轨道' + (idx + 1) + ': ' + esc(t.name) + '</option>';
+			});
+			return '<label>' + label + ' <select class="form-control form-control-sm small-input" onchange="setP(' + i + ',\'' + key + '\',parseInt(this.value))">' + opts + '</select></label>';
+		}
+		function setP(i, key, val) {
+			var it = cur().Items[i];
+			it[key] = val;
+			if (key === 'Ensemble') {
+				if (val && it.MainTrack === -2) it.MainTrack = -1; // 切合奏时「整曲主轨」无意义(辅轨已覆盖),回退自动(轨道1)
+				renderTracks(); // 勾选/取消合奏后立即刷新(显示/隐藏轨道下拉)
+			}
+			savePlaylists();
+		}
+		function moveItem(i, d) {
+			var items = cur().Items, j = i + d;
+			if (j < 0 || j >= items.length) return;
+			var t = items[i]; items[i] = items[j]; items[j] = t;
+			savePlaylists(); renderTracks();
+		}
+		function delItem(i) { cur().Items.splice(i, 1); savePlaylists(); renderTracks(); }
+
+		// ---------- 添加曲目 ----------
+		// ---------- 添加曲目 ----------
+		// 打开「添加MIDI」模态框:显示目标歌单 + 从上次目录开始浏览
+		function openAddMidi() {
+			$('#addTargetPl').text(curPl >= 0 && cur() ? cur().Name : '(请先选择歌单)');
+			$('#addHint').text('');
+			$('#addMidiModal').modal('show');
+			loadDirPicker(midiDirCache || 'D:\\');
+		}
+		function loadDirPicker(path) {
+			$('#dirList').html('<div class="p-3 text-center text-muted">加载中...</div>');
+			$.ajax({
+				url: '/ListDirectory', type: 'POST', contentType: 'application/json',
+				data: JSON.stringify({ path: path }),
+				success: function (res) {
+					if (res.result !== 'success') {
+						$('#dirList').html('<div class="p-3 text-danger">' + esc(res.message || '读取失败') + '</div>');
+						return;
+					}
+					$('#dirCurrentPath').text(res.current);
+					midiDirCache = res.current; localStorage.setItem('midiDir', midiDirCache);
+					var html = '';
+					if (res.parent) {
+						html += '<div class="dir-item" data-path="' + escAttr(res.parent) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #e9ecef;"><i class="fas fa-level-up-alt mr-2 text-secondary"></i>..</div>';
+					}
+					(res.directories || []).forEach(function (d) {
+						html += '<div class="dir-item" data-path="' + escAttr(res.current + '\\' + d) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #e9ecef;" title="' + escAttr(d) + '"><i class="fas fa-folder mr-2 text-warning"></i>' + esc(d) + '</div>';
+					});
+					$('#dirList').html(html);
+					// 加载当前目录的 MIDI 文件(点击即添加)
+					$.ajax({
+						url: '/ListMidiFiles', type: 'POST', contentType: 'application/json',
+						data: JSON.stringify({ path: res.current }),
+						success: function (r) {
+							if (r.result !== 'success') return;
+							(r.files || []).forEach(function (f) {
+								html += '<div class="file-item" data-path="' + escAttr(f.path) + '" data-name="' + escAttr(f.name) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #e9ecef;" title="' + escAttr(f.name) + '"><i class="fas fa-file-audio mr-2 text-primary"></i>' + esc(f.name) + ' <span class="badge badge-light ml-1">MIDI</span></div>';
+						});
+						$('#dirList').html(html);
+						if (!(r.files || []).length && !(res.directories || []).length && !res.parent)
+							$('#dirList').append('<div class="p-3 text-center text-muted">(空目录)</div>');
+					},
+					error: function () { $('#dirList').html(html); }
+				});
+			},
+			error: function () { $('#dirList').html('<div class="p-3 text-danger">读取目录失败</div>'); }
+		});
+		}
+
+		// 目录/文件点击用事件委托(避免 html 重建后绑定丢失;页面加载时绑定一次)
+		$('#dirList').on('click', '.dir-item', function () { loadDirPicker($(this).data('path')); });
+		$('#dirList').on('click', '.file-item', function () {
+			var ok = addMidi($(this).data('path'), $(this).data('name'));
+			$('#addHint').text(ok ? '已添加: ' + $(this).data('name') : '添加失败(已在歌单中或未选择歌单)');
+		});
+		function addMidi(path, name) {
+			if (curPl < 0 || !playlists[curPl]) return false;
+			var items = cur().Items;
+			if (items.some(function (x) { return x.Path === path; })) return false;
+			items.push({ Path: path, FileName: name, Analysis: false, Chord: false, Speed: 1.0, Transpose: 0, Ensemble: false, MainTrack: -2, SlaveTrack: -1 }); // 单人默认「全部轨道(整曲)」
+			savePlaylists(); renderTracks();
+			return true;
+		}
+
+		// ---------- 播放 ----------
+		function getMode() { return $('input[name=mode]:checked').val(); }
+		// 播放/暂停合并:未播放→从头播;播放中→暂停;暂停中→继续(不断头)
+		var playState = {}; // 最近一次轮询状态缓存
+		function togglePlay() {
+			if (playState.playing) { ctl('pause'); }
+			else if (playState.paused) { ctl('resume'); }
+			else playList();
+		}
+		function playList() {
+			if (curPl < 0 || !cur() || cur().Items.length === 0) { alert('请先选择歌单并添加曲目'); return; }
+			api('PlaylistPlay', { items: cur().Items, index: selectedIdx, mode: getMode() }, function (r) { if (r.result !== 'success') alert(r.message || '播放失败'); });
+		}
+		function ctl(cmd, extra) { api('PlaylistControl', $.extend({ cmd: cmd, mode: getMode() }, extra || {})); }
+
+		// 进度条拖动:拖动中本地显示不轮询覆盖,松手后 seek
+		var seeking = false;
+		function onSeekInput(el) {
+			seeking = true;
+			var total = playState.totalMs || 0;
+			$('#playTime').text(fmt(el.value / 1000 * total) + ' / ' + fmt(total));
+		}
+		function onSeekChange(el) {
+			var total = playState.totalMs || 0;
+			if (total > 0) ctl('seek', { ms: Math.round(el.value / 1000 * total) });
+			seeking = false;
+		}
+
+		// ---------- 状态轮询 ----------
+		function pollStatus() {
+			api('PlaylistStatus', null, function (r) {
+				playState = r;
+				// 播放中:同步选中到当前曲目(自动下一首时绿色跟随);未播放:显示「将演奏」
+				if ((r.playing || r.paused) && r.index >= 0) selectedIdx = r.index;
+				$('#nowPlaying').text(r.playing || r.paused
+					? ('演奏中: ' + (r.file || '播放中'))
+					: ('将演奏: ' + willPlayName()));
+				// 播放/暂停按钮状态
+				var btn = $('#playToggleBtn');
+				if (r.playing) { btn.html('<i class="fas fa-pause mr-1"></i>暂停'); btn.removeClass('btn-primary').addClass('btn-warning'); }
+				else if (r.paused) { btn.html('<i class="fas fa-play mr-1"></i>继续'); btn.removeClass('btn-warning').addClass('btn-primary'); }
+				else { btn.html('<i class="fas fa-play mr-1"></i>播放'); btn.removeClass('btn-warning').addClass('btn-primary'); }
+				// 进度条(拖动中不覆盖)
+				if (!seeking) {
+					var pct = r.totalMs > 0 ? Math.round(r.progressMs / r.totalMs * 1000) : 0;
+					$('#playProgress').val(pct);
+					$('#playTime').text(fmt(r.progressMs) + ' / ' + fmt(r.totalMs));
+				}
+				$('#playError').text(r.error || '');
+				// 演奏就绪状态
+				var ps = r.perform || {};
+				var el = $('#performStatus');
+				var cls = 'ready-bad', txt = ps.hint || '';
+				if (ps.isBard && ps.isPerforming) { cls = 'ready-ok'; txt = '● ' + txt; }
+				else if (ps.isBard) { cls = 'ready-warn'; txt = '⚠ ' + txt; }
+				else if (txt) { cls = 'ready-bad'; txt = '✖ ' + txt; }
+				el.attr('class', 'ml-auto ' + cls).text(txt);
+			});
+		}
+		function fmt(ms) {
+			if (!ms) return '0:00';
+			var s = Math.floor(ms / 1000);
+			return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+		}
+		function esc(s) { return $('<div>').text(s || '').html(); }
+		function escAttr(s) { return esc(s).replace(/'/g, '&#39;').replace(/"/g, '&quot;'); }
+
+		// ---------- 初始化 ----------
+		loadPlaylists();
+		setInterval(pollStatus, 500);
+	</script>
+</body>
+</html>

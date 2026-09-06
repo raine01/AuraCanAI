@@ -1,0 +1,14 @@
+{
+  "Author": "ThousanRaine",
+  "Name": "AuraCanAI",
+  "Punchline": "游戏内 AI 角色扮演助手:本地网页控制台 + LLM + TTS + 聊天记录",
+  "Description": "AuraCanAI 卫月插件版。提供本地网页控制台(localhost:8051),支持聊天语音提示(TTS)、DeepSeek 大模型角色扮演、玩家进出/注视提醒、聊天记录归档与全文搜索、消息发送。指令:/auracanai 打开游戏内控制面板。",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "AuraCan",
+    "AI",
+    "TTS",
+    "RolePlay",
+    "chatlog"
+  ]
+}

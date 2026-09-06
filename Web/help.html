@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>AuraCanAI - 帮助</title>
+	<link href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/css/bootstrap.min.css" rel="stylesheet">
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+	<style>
+		body {
+			background: #f8f9fa;
+		}
+		.help-section {
+			background: #fff;
+			border-radius: 8px;
+			padding: 16px 24px;
+			margin-bottom: 12px;
+			box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+		}
+		.help-section h4 {
+			font-size: 1.1rem;
+			font-weight: 600;
+			margin: 0;
+			color: #343a40;
+		}
+		.help-section h4 i:first-child {
+			width: 26px;
+			color: #007bff;
+		}
+		.help-toggle {
+			cursor: pointer;
+			user-select: none;
+			padding: 4px 0;
+		}
+		.help-toggle .chev {
+			float: right;
+			color: #adb5bd;
+			transition: transform .2s;
+			line-height: 1.6;
+		}
+		.help-section.open .help-toggle .chev {
+			transform: rotate(180deg);
+		}
+		.help-body {
+			display: none;
+			padding-top: 12px;
+		}
+		.help-section.open .help-body {
+			display: block;
+		}
+		.help-section p, .help-section li {
+			font-size: 0.92rem;
+			color: #495057;
+			line-height: 1.7;
+		}
+		.help-section code {
+			background: #e9ecef;
+			border-radius: 4px;
+			padding: 1px 6px;
+			font-size: 0.85rem;
+			color: #d6336c;
+		}
+		.main {
+			padding-top: 1.5rem;
+			margin-top: 3rem;
+			padding-bottom: 2rem;
+		}
+	</style>
+</head>
+<body>
+	<!-- 导航栏 -->
+
+	<main class="main">
+		<div class="container" style="max-width: 860px;">
+
+			<div class="help-section">
+				<h4 class="help-toggle" onclick="toggleHelp(this)"><i class="fas fa-desktop"></i> 游戏内面板<i class="fas fa-chevron-down chev"></i></h4>
+				<div class="help-body">
+					<p>卫月插件列表点「打开」弹出<b>主面板</b>,六个页签:</p>
+					<ul>
+						<li><b>附近玩家</b>:看看周围都有谁(状态/名字筛选,点名字一键复制,可直接加备注)</li>
+						<li><b>活点地图</b>:附近玩家的位置一目了然</li>
+						<li><b>玩家备注</b>:给玩家记多行备注(绑定角色ID防改名,详见下方)</li>
+						<li><b>回忆检索</b>:输入玩家名,自动翻聊天记录并总结你们聊过的话题</li>
+						<li><b>行为设置</b>:设定"当 XX 发生时自动做 XX"的规则(详见下方)</li>
+						<li><b>演奏</b>:MIDI 自动演奏(详见下方「演奏」段)</li>
+					</ul>
+					<p>另有<b>控制面板</b>:设置 DeepSeek Key、网页服务端口(改后点「重启网页服务」生效,可复制网页地址)、语音播报的开关/音量/语速。</p>
+				</div>
+			</div>
+
+			<div class="help-section">
+				<h4 class="help-toggle" onclick="toggleHelp(this)"><i class="fas fa-terminal"></i> 游戏内指令<i class="fas fa-chevron-down chev"></i></h4>
+				<div class="help-body">
+					<ul>
+						<li><code>/aca</code> — 打开主面板(保持上次的页签)</li>
+						<li><code>/aca list</code> — 附近玩家</li>
+						<li><code>/aca map</code> — 活点地图;<code>/aca map 玩家名</code> 直接定位该玩家</li>
+						<li><code>/aca search</code> — 回忆检索(没带名字时,自动搜索当前选中的玩家);<code>/aca search 玩家名</code> 直接指定</li>
+						<li><code>/aca look</code> — 看向最后一个看我的人(最后注视你的玩家);<code>/aca look 玩家名</code> 看向指定玩家</li>
+						<li><code>/aca note</code> — 查看/编辑当前选中玩家的备注(未选中玩家时打开玩家备注页签)</li>
+						<li><code>/aca behavior</code> — 行为设置</li>
+						<li><code>/aca music</code> — 演奏(导入 MIDI 自动演奏,见下方「演奏」段)</li>
+						<li><code>/aca setting</code> — 打开设置面板(网页端口、语音、DeepSeek API Key 等)</li>
+						<li><code>/aca macro N</code> — 直接触发 N 号宏(0-99);共享宏用 <code>/aca macro sN</code></li>
+					</ul>
+				</div>
+			</div>
+
+			<div class="help-section">
+				<h4 class="help-toggle" onclick="toggleHelp(this)"><i class="far fa-comments"></i> 聊天<i class="fas fa-chevron-down chev"></i></h4>
+				<div class="help-body">
+					<ul>
+						<li>实时显示游戏里各频道的消息(说话、小队、部队、跨服贝、悄悄话等)</li>
+						<li>选好频道输入内容即可发送</li>
+						<li>收到悄悄话时,点消息下的「回复」按钮可以直接回对方(自动带上服务器名,跨服也能回)</li>
+						<li>哪些频道要显示、要 AI 参与,都在「配置」页设置</li>
+					</ul>
+				</div>
+			</div>
+
+			<div class="help-section">
+				<h4 class="help-toggle" onclick="toggleHelp(this)"><i class="fas fa-volume-up"></i> 语音播报<i class="fas fa-chevron-down chev"></i></h4>
+				<div class="help-body">
+					<ul>
+						<li>用 Windows 系统语音把聊天读出来,音量、语速可在游戏内面板调</li>
+						<li>每个频道可单独设置「播读」,或「只有被发言人注视时播读」</li>
+						<li>支持关键字播报、屏蔽字过滤(不想听的内容直接过滤掉)</li>
+						<li>「玩家进出」「注视提醒」也可以在配置页打开语音提醒</li>
+					</ul>
+				</div>
+			</div>
+
+			<div class="help-section">
+				<h4 class="help-toggle" onclick="toggleHelp(this)"><i class="fas fa-sticky-note"></i> 玩家备注<i class="fas fa-chevron-down chev"></i></h4>
+				<div class="help-body">
+					<p>给玩家记<b>多行备注</b>(一段话,如"部队管理,擅长合奏""上次一起打过本"等)。备注<b>绑定角色ID(ContentId)</b>,玩家改名后依然能找到。</p>
+					<ul>
+						<li><b>添加/编辑</b>:打开「附近玩家」页签,点玩家行右侧的「添加」/「编辑」按钮(仅面对面——玩家在场时可用),自动切到「玩家备注」页签填写内容</li>
+						<li><b>查看/修改/删除</b>:在「玩家备注」页签输入关键字检索(匹配玩家名或备注内容),点击结果行打开编辑框修改或删除</li>
+						<li><b>快捷查看</b>:游戏里选中一个玩家,输入 <code>/aca note</code> 直接查看/编辑他的备注</li>
+						<li>已备注的玩家在「附近玩家」列表名字前会显示 <b>★</b> 标记;删除备注时先点「删除」再点「确认删除?」</li>
+					</ul>
+				</div>
+			</div>
+
+			<div class="help-section">
+				<h4 class="help-toggle" onclick="toggleHelp(this)"><i class="fas fa-bolt"></i> 行为设置<i class="fas fa-chevron-down chev"></i></h4>
+				<div class="help-body">
+					<p><b>它是什么</b>:设定一些自动规则——游戏里发生某件事时,自动帮你做一件事。比如"有人看我时选中他""我进房区时触发宏"。适合角色扮演时做自动化小动作。</p>
+					<p><b>怎么用(推荐,不用学语法)</b>:</p>
+					<ol>
+						<li>行为设置页签点「+ 新增行为」</li>
+						<li>在下方描述框里用<b>大白话</b>写想要的效果,例如:<br><code>当龙尾轻轻摇在看我且我在角色扮演中时,5秒后触发3号宏,冷却30秒</code></li>
+						<li>点「<b>生成行为语句</b>」,AI 自动把命令写好并填入上方「行为语句」框</li>
+						<li>检查一下没问题,点「保存」就生效了</li>
+					</ol>
+					<ul>
+						<li>需要先在游戏内「设置」面板配置 <b>DeepSeek API Key</b>,没配的话生成按钮是灰的</li>
+						<li>想一次设多条规则?用「并且/同时」或「；」把多个效果写在一段里</li>
+						<li>AI 写好后仍可手动修改,保存前会自动检查语法,有问题会红字提示</li>
+					</ul>
+					<p><b>手动写(可选)</b>:格式就是「动作 + 条件 + 冷却」。一条规则的模板:</p>
+					<pre><code>trigger 3 when looking_player = 龙尾轻轻摇 cooldown 30</code></pre>
+					<p>意思是:<b>当</b> 龙尾轻轻摇 <b>在看我时</b>,触发 3 号宏,30 秒内不重复。常用写法:</p>
+					<ul>
+						<li><code>trigger 5 after 3 when enter_player = 龙尾轻轻摇 cooldown 60</code> — 龙尾轻轻摇来了,3 秒后触发 5 号宏(1 分钟内不重复)</li>
+						<li><code>trigger 5 after 3,6 when enter_player = 龙尾轻轻摇 cooldown 60</code> — 同上,但延迟在 3~6 秒间随机(支持小数,如 after 0.5,2)</li>
+						<li><code>trigger 1,2,3 when anyone_looking cooldown 20</code> — 有人看我时,依次触发 1、2、3 号宏(执行完前一个再执行下一个;可混用共享宏,如 trigger s1,2)</li>
+						<li><code>say p 欢迎{last_enter}来到我家! when anyone_enter</code> — 有人进入附近时,在小队频道欢迎ta(变量自动替换成玩家名,变量为空自动跳过)</li>
+						<li><code>say t 你好呀 when anyone_looking</code> — 有人看我时,悄悄话回复最后私聊我的人(没指定目标就默认发 last_tell)</li>
+						<li><code>say t 龙尾轻轻摇@红玉海 在吗? when in_housing</code> — 悄悄话发给固定的人(内容开头写 名字@服务器)</li>
+						<li><code>look when anyone_looking cooldown 10</code> — 有人看我时,选中最近接触我的人</li>
+						<li><code>trigger s2 when in_housing and not in_party cooldown 0</code> — 在 S/M/L 房或公寓内且不在小队时,触发共享宏 2(无冷却)</li>
+						<li><code>say p 欢迎{last_enter} when anyone_enter need not in_combat</code> — 有人进入附近时欢迎ta;但若进入瞬间我在战斗中,本次直接丢弃(之后出战斗也不会补触发;need 是状态过滤,与写进 when 的 and 不同)</li>
+						<li><code>trigger 1 when in_combat ; trigger 2 when anyone_leave</code> — 战斗中触发宏 1;有人离开时触发宏 2</li>
+					</ul>
+					{{behaviorSyntax}}
+					{{behaviorSayChannels}}
+					{{behaviorVariables}}
+					{{behaviorConditions}}
+					<p><b>小贴士</b>:编辑时勾选「聊天内提示」,动作触发成功时会在聊天栏提示你;「离开时不触发」「战斗中不触发」(均默认勾选):你的状态为「离开」或处于战斗中时,该行为不触发。</p>
+				</div>
+			</div>
+
+			<div class="help-section">
+				<h4 class="help-toggle" onclick="toggleHelp(this)"><i class="fas fa-music"></i> 演奏(MIDI)<i class="fas fa-chevron-down chev"></i></h4>
+				<div class="help-body">
+					<p>网页「歌单」页(地址见设置面板)维护歌单:添加 MIDI;每曲可设「预处理」「拆解」「速度」「移调」与演奏轨道(整曲/指定轨,合奏曲另设主辅轨)。播放模式:单曲 / 循环 / 列表 / 随机,支持暂停、继续、停止、上一首/下一首。</p>
+					<p>需角色持乐器进入演奏模式;合奏需同机双开,辅端为原版客户端、无需安装任何软件。</p>
+
+					<p style="margin-top:10px"><b>🎵 合奏(双开)步骤</b>:</p>
+					<ol>
+						<li><b>主端(装卫月+本插件)</b>与<b>辅端(原版客户端)</b>都进入游戏,双方角色持乐器并进入演奏模式</li>
+						<li>网页「歌单」页选中合奏曲目 → 勾选「合奏」→ 选择主轨/辅轨(单轨曲目辅端自动不演奏)</li>
+						<li>点播放:主端演奏自己窗口,辅端由主端向辅端窗口注入按键,两端同刻开始</li>
+					</ol>
+
+					<p><b>⚠️ 合奏建议以管理员身份启动卫月端(XIVLauncherCN)</b></p>
+					<p>Windows 有<b>UIPI 权限隔离</b>机制:低权限程序不能向更高权限程序的窗口发送按键。若主端(卫月)以低权限方式运行,而辅端(盛趣登录器启动)是普通权限,主端向辅端窗口注入按键会被系统拒绝(症状:主端自己正常演奏,辅端毫无反应)。</p>
+					<ul>
+						<li><b>推荐</b>:用桌面「XIVLauncherCN(管理员)」快捷方式启动主端(每次启动弹 UAC,点「是」)——管理员权限高于辅端,合奏稳定可靠</li>
+						<li>若用普通方式启动,需确保主端与辅端权限一致;不要从受限/低权限终端启动 XIVLauncherCN</li>
+						<li>若合奏时辅端无反应:任务管理器确认两个 ffxiv_dx11 进程权限级别,主端需不低于辅端,重启 XIVLauncherCN 再试</li>
+					</ul>
+
+					<p><b>已知限制</b>:辅端(纯原版)状态跨进程不可读,演奏就绪检测仅覆盖主声部(自己),辅端需人工确认已进入演奏模式。</p>
+				</div>
+			</div>
+		</div>
+	</main>
+
+	<script>
+		// 帮助页折叠:点击标题展开/收起(全部默认收起)
+		function toggleHelp(h) {
+			var sec = h.closest('.help-section');
+			if (sec) sec.classList.toggle('open');
+		}
+	</script>
+
+	<!-- 页脚 -->
+</body>
+</html>

@@ -1,0 +1,608 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>配置</title>
+	<link href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/css/bootstrap.min.css" rel="stylesheet">
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+	<style>
+		:root { --primary: #288cff; --secondary: #e8f2ff; }
+		body { font-family: 'Nunito', sans-serif; background-color: #f8f9fa; }
+		.card-header { font-weight: 600; }
+		.toggle-description { font-size: 0.875rem; color: #6c757d; }
+		.loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 9999; color: white; }
+		.hidden { display: none; }
+		.save-btn-container { position: sticky; bottom: 20px; z-index: 1000; margin-bottom: 3rem; }
+		.reset-btn-container { margin-bottom: 1rem; }
+		.save-btn { box-shadow: 0 4px 12px rgba(0,0,0,0.15); padding: 0.75rem 2rem; font-weight: 600; }
+		.custom-alert { position: fixed; top: 80px; right: 20px; z-index: 9999; min-width: 300px; animation: slideInRight 0.3s, slideOutRight 0.3s 2.7s; }
+		@keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+		@keyframes slideOutRight { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+		.channel-item { border-bottom: 1px solid #e9ecef; padding: 10px 0; }
+		.channel-item:last-child { border-bottom: none; }
+	</style>
+</head>
+<body>
+	<!-- 导航栏 -->
+
+	<!-- 加载遮罩层 -->
+	<div id="loadingOverlay" class="loading-overlay">
+		<div class="text-center">
+			<div class="spinner-border" role="status"><span class="sr-only">加载中...</span></div>
+			<div class="mt-2">正在加载配置...</div>
+		</div>
+	</div>
+
+	<!-- 主表单 -->
+	<form id="configForm" method="post">
+		<main class="main">
+			<div class="container py-5">
+				<!-- 消息设置部分 -->
+				<section class="mb-5">
+					<h2 class="h3 mb-4 border-bottom pb-2">消息设置</h2>
+
+					<!-- 语音提示设置 -->
+					<div class="card mb-4" id="voiceSettings">
+						<div class="card-header bg-secondary text-white">
+							<h4 class="h5 mb-0"><i class="fas fa-volume-up mr-2"></i>语音提示设置</h4>
+						</div>
+						<div class="card-body">
+							<div class="row mb-4">
+								<div class="col-md-6 mb-3">
+									<div class="d-flex align-items-center mb-2">
+										<div class="custom-control custom-switch mr-3">
+											<input class="custom-control-input" type="checkbox" id="keywordToggle">
+											<label class="custom-control-label" for="keywordToggle">关键字</label>
+										</div>
+										<div class="toggle-description mt-1">仅影响频道播读</div>
+									</div>
+									<div class="tags-input-wrapper">
+										<input type="text" class="form-control" id="keywordsInput" placeholder="输入关键字，用|分隔" autocomplete="off">
+									</div>
+								</div>
+								<div class="col-md-6 mb-3">
+									<div class="d-flex align-items-center mb-2">
+										<div class="custom-control custom-switch mr-3">
+											<input class="custom-control-input" type="checkbox" id="blockwordToggle">
+											<label class="custom-control-label" for="blockwordToggle">屏蔽字</label>
+										</div>
+										<div class="toggle-description mt-1">仅影响频道播读</div>
+									</div>
+									<div class="tags-input-wrapper">
+										<input type="text" class="form-control" id="blockwordsInput" placeholder="输入屏蔽字，用|分隔" autocomplete="off">
+									</div>
+								</div>
+							</div>
+
+							<h5 class="h6 mb-3">频道播读设置</h5>
+							<div id="voiceChannelConfig">
+								<!-- 语音频道配置将通过JavaScript动态生成 -->
+							</div>
+						</div>
+					</div>
+
+					<!-- 聊天记录设置 -->
+					<div class="card mb-4" id="chatLogSettings">
+						<div class="card-header bg-secondary text-white">
+							<h4 class="h5 mb-0"><i class="fas fa-history mr-2"></i>聊天记录设置</h4>
+						</div>
+						<div class="card-body">
+							<div class="row mb-4">
+								<div class="col-12">
+									<div class="custom-control custom-switch">
+										<input class="custom-control-input" type="checkbox" id="privacyModeToggle">
+										<label class="custom-control-label" for="privacyModeToggle">隐私模式</label>
+									</div>
+									<div class="toggle-description mt-1">启用后不会记录聊天信息</div>
+								</div>
+							</div>
+
+							<div class="row mb-4">
+								<div class="col-md-8 mb-3">
+									<label class="font-weight-bold">记录文件地址</label>
+									<div class="input-group">
+										<input type="text" class="form-control" id="defaultFilePath" placeholder="输入文件路径">
+										<div class="input-group-append">
+											<button type="button" class="btn btn-outline-secondary" id="browseDirBtn"><i class="fas fa-folder-open mr-1"></i>浏览</button>
+										</div>
+									</div>
+								</div>
+								<div class="col-md-4 mb-3">
+									<label class="font-weight-bold">日志文件分割周期</label>
+									<select class="form-control" id="logPeriodInput">
+										<option value="1">每天</option>
+										<option value="2">每周</option>
+										<option value="3">每月</option>
+										<option value="4">每年</option>
+									</select>
+								</div>
+								<div class="col-md-4 mb-3" id="weekStartDayContainer" style="display: none;">
+									<label class="font-weight-bold">每周起始日</label>
+									<select class="form-control" id="weekStartDayInput">
+										<option value="0">周日</option>
+										<option value="1">周一</option>
+										<option value="2">周二</option>
+										<option value="3">周三</option>
+										<option value="4">周四</option>
+										<option value="5">周五</option>
+										<option value="6">周六</option>
+									</select>
+								</div>
+							</div>
+
+							<h5 class="h6 mb-3">频道记录设置</h5>
+							<div id="logChannelConfig">
+								<!-- 日志频道配置将通过JavaScript动态生成 -->
+							</div>
+						</div>
+					</div>
+				</section>
+
+				<div class="save-btn-container text-center">
+					<button type="submit" class="btn btn-success btn-lg save-btn" id="saveConfigBtn">
+						<i class="fas fa-save mr-2"></i>保存所有配置
+					</button>
+				</div>
+
+				<div class="reset-btn-container text-center mb-3">
+					<button type="button" class="btn btn-warning btn-lg" id="resetConfigBtn">
+						<i class="fas fa-undo mr-2"></i>还原默认配置
+					</button>
+					<small class="d-block text-muted mt-2">这将删除所有自定义配置并恢复为默认设置</small>
+				</div>
+
+				<!-- 删除频道配置区域 -->
+				<div class="delete-channels-section mt-5">
+					<div class="card border-danger">
+						<div class="card-header bg-danger text-white">
+							<h4 class="h5 mb-0"><i class="fas fa-trash-alt mr-2"></i>删除不使用频道</h4>
+						</div>
+						<div class="card-body">
+							<p class="text-muted mb-3">删除频道将同时关闭该频道的语音提示和聊天记录功能，移除完毕后点击保存所有配置生效</p>
+							<div id="deleteChannelButtons" class="d-flex flex-wrap gap-2">
+								<!-- 删除按钮将通过JavaScript动态生成 -->
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</main>
+	</form>
+
+	<!-- 页脚 -->
+
+	<!-- 目录选择模态框 -->
+	<div class="modal fade" id="dirPickerModal" tabindex="-1" role="dialog" aria-hidden="true">
+		<div class="modal-dialog modal-lg" role="document">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h5 class="modal-title"><i class="fas fa-folder-open mr-2"></i>选择记录文件目录</h5>
+					<button type="button" class="close" data-dismiss="modal" aria-label="关闭"><span aria-hidden="true">&times;</span></button>
+				</div>
+				<div class="modal-body">
+					<p class="text-muted small mb-2" id="dirCurrentPath">加载中...</p>
+					<div id="dirList" style="max-height: 320px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 4px;">
+						<div class="p-3 text-center text-muted">加载中...</div>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-secondary" data-dismiss="modal">取消</button>
+					<button type="button" class="btn btn-primary" id="dirPickBtn">选择此目录</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- 脚本引入 -->
+	<script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/js/bootstrap.bundle.min.js"></script>
+
+	<script>
+		$(document).ready(function() {
+			// 初始化
+			$('#loadingOverlay').removeClass('hidden');
+
+			// 从C#后端获取配置数据
+			loadConfigFromServer();
+
+			// 保存所有配置
+			$('#configForm').submit(function(e) {
+				e.preventDefault();
+				saveConfigToServer();
+			});
+
+			// 还原默认配置
+			$('#resetConfigBtn').click(function() {
+				if (confirm('确定要恢复默认配置吗？这将删除所有自定义设置')) {
+					resetConfigToDefault();
+				}
+			});
+
+			// 选择记录周期为每周的时候，可以自定义每周的第一天为周几
+			$('#logPeriodInput').change(function() {
+				if ($(this).val() === '2') {
+					$('#weekStartDayContainer').show();
+				} else {
+					$('#weekStartDayContainer').hide();
+				}
+			});
+			$('#logPeriodInput').trigger('change');
+		});
+
+		// 生成频道配置HTML
+		function generateChannelConfig(channels, type) {
+			let html = '';
+			channels.forEach((channel, index) => {
+				const channelId = type + '_' + channel.channel;
+				html = html + `
+				<div class="channel-item">
+					<div class="row align-items-center">
+						<div class="col-md-4">
+							<label class="font-weight-bold">` + channel.channelName + `</label>
+							` + (channel.cmd ? (`<small class="text-muted">指令: ` + channel.cmd + `</small>`) : '') + `
+						</div>`
+				// 频道播读设置
+				if (type === 'voice') {
+					html = html + `
+						<div class="col-md-4">
+							<div class="custom-control custom-switch">
+								<input class="custom-control-input" type="checkbox" autocomplete="off"
+									id="` + channelId + `_switch1"
+									data-channel="` + channel.channel + `"
+									data-channelname="` + channel.channelName + `"
+									data-switch1name="` + channel.switch1Name + `"
+									data-switch2name="` + channel.switch2Name + `"
+									data-cmd="` + channel.cmd + `"
+									data-type="` + type + `">
+								<label class="custom-control-label" for="` + channelId + `_switch1">` + channel.switch1Name + `</label>
+							</div>
+						</div>
+						<div class="col-md-4">
+							<div class="custom-control custom-switch">
+								<input class="custom-control-input" type="checkbox" autocomplete="off"
+									id="` + channelId + `_switch2"
+									data-channel="` + channel.channel + `"
+									data-type="` + type + `">
+								<label class="custom-control-label" for="` + channelId + `_switch2">` + channel.switch2Name + `</label>
+							</div>
+						</div>`;
+				}
+				// 频道记录设置
+				if (type === 'log') {
+					html = html + `
+						<div class="col-md-4">
+							<div class="custom-control custom-switch">
+								<input class="custom-control-input" type="checkbox" autocomplete="off"
+									id="` + channelId + `_logEnabled"
+									data-channel="` + channel.channel + `"
+									data-type="` + type + `">
+								<label class="custom-control-label" for="` + channelId + `_logEnabled">是否记录</label>
+							</div>
+						</div>
+						<div class="col-md-4">
+							<div class="custom-control custom-switch">
+								<input class="custom-control-input" type="checkbox" autocomplete="off"
+									id="` + channelId + `_llm"
+									data-channel="` + channel.channel + `"
+									data-type="` + type + `">
+								<label class="custom-control-label" for="` + channelId + `_llm">大模型辅助聊天</label>
+							</div>
+						</div>`;
+				}
+				html += `</div></div>`;
+			});
+			return html;
+		}
+
+		// 设置按钮不能同时打开
+		function bindVoiceSwitchExclusiveLogic() {
+			$('input[data-type="voice"]').change(function() {
+				const $currentSwitch = $(this);
+				const channel = $currentSwitch.data('channel');
+				// 只对非 io 和 zs 频道应用互斥逻辑
+				if (channel !== 'io' && channel !== 'zs' && $currentSwitch.prop('checked')) {
+					if ($currentSwitch.attr('id').includes('_switch1')) {
+						$(`#voice_` + channel + `_switch2`).prop('checked', false);
+					} else {
+						$(`#voice_` + channel + `_switch1`).prop('checked', false);
+					}
+				}
+			});
+		}
+
+		// 从服务器加载配置
+		function loadConfigFromServer() {
+			$.ajax({
+				url: '/GetConfig',
+				type: 'POST',
+				success: function(config) {
+					populateFormFromConfig(config);
+					$('#loadingOverlay').addClass('hidden');
+				},
+				error: function(xhr, status, error) {
+					console.error('加载配置失败:', error);
+					$('#loadingOverlay').addClass('hidden');
+					showAlert('加载配置失败: ' + error, 'danger');
+				}
+			});
+		}
+
+		// 保存配置到服务器
+		function saveConfigToServer() {
+			$('#loadingOverlay').removeClass('hidden');
+
+			// 构建符合C#类结构的JSON对象
+			const jsonData = {
+				privacyMode: $('#privacyModeToggle').prop('checked'),
+				keywords: {
+					enable: $('#keywordToggle').prop('checked'),
+					words: $('#keywordsInput').val()
+				},
+				blockwords: {
+					enable: $('#blockwordToggle').prop('checked'),
+					words: $('#blockwordsInput').val()
+				},
+				defaultFilePath: $('#defaultFilePath').val() || "",
+				logPeriod: parseInt($('#logPeriodInput').val()) || 1,
+				weekStartDay: parseInt($('#weekStartDayInput').val()) || 0, // 新增周起始日
+				channelConfig: []
+			};
+
+			// 收集语音提示设置
+			$('input[data-type="voice"]').each(function() {
+				const $input = $(this);
+				const channel = $input.data('channel');
+				const isSwitch1 = $input.attr('id').includes('_switch1');
+				let channelConfig = jsonData.channelConfig.find(c => c.channel === channel);
+				if (!channelConfig) {
+					channelConfig = {
+						channel: channel,
+						channelName: $input.data('channelname'),
+						cmd: $input.data('cmd'),
+						switch1: false,
+						switch1Name: $input.data('switch1name'),
+						switch2: false,
+						switch2Name: $input.data('switch2name'),
+						logEnabled: false,
+						useCustomPath: false,
+						customFilePath: ""
+					};
+					jsonData.channelConfig.push(channelConfig);
+				}
+				if (isSwitch1) {
+					channelConfig.switch1 = $input.prop('checked');
+				} else {
+					channelConfig.switch2 = $input.prop('checked');
+				}
+			});
+
+			// 收集聊天记录设置(是否记录)
+			$('input[data-type="log"]').each(function() {
+				const $input = $(this);
+				const channel = $input.data('channel');
+				const isLogEnabled = $input.attr('id').includes('_logEnabled');
+				let channelConfig = jsonData.channelConfig.find(c =>
+					c.channel === channel
+				);
+				if (isLogEnabled) {
+					channelConfig.logEnabled = $input.prop('checked');
+				} else {
+					channelConfig.llm = $input.prop('checked');
+				}
+			});
+
+			console.log('保存的JSON数据:', jsonData);
+
+			// 实际保存到服务器
+			$.ajax({
+				url: '/SaveConfig',
+				type: 'POST',
+				contentType: 'application/json',
+				data: JSON.stringify(jsonData),
+				success: function(response) {
+					$('#loadingOverlay').addClass('hidden');
+					showAlert('涟音将配置融入茶汤。茶香知意，满室芬芳', 'success');
+				},
+				error: function(xhr, status, error) {
+					$('#loadingOverlay').addClass('hidden');
+					showAlert('配置保存失败: ' + error, 'danger');
+				}
+			});
+		}
+
+		// 还原默认配置函数
+		function resetConfigToDefault() {
+			$('#loadingOverlay').removeClass('hidden');
+			$.ajax({
+				url: '/DeleteConfig',
+				type: 'POST',
+				success: function(response) {
+					$('#loadingOverlay').addClass('hidden');
+					showAlert('已恢复默认配置', 'success');
+
+					// 清理现有的动态内容
+					$('#voiceChannelConfig').empty();
+					$('#logChannelConfig').empty();
+					$('#deleteChannelButtons').empty();
+
+					// 重新加载配置
+					loadConfigFromServer();
+				},
+				error: function(xhr, status, error) {
+					$('#loadingOverlay').addClass('hidden');
+					showAlert('恢复默认配置失败: ' + error, 'danger');
+				}
+			});
+		}
+
+		// 从配置对象填充表单
+		function populateFormFromConfig(config) {
+			try {
+				// 基本设置
+				$('#privacyModeToggle').prop('checked', config.privacyMode || false);
+				$('#defaultFilePath').val(config.defaultFilePath || "");
+				$('#logPeriodInput').val(config.logPeriod || 1);
+				$('#weekStartDayInput').val(config.weekStartDay || 1);
+
+				// 关键字设置
+				if (config.keywords) {
+					$('#keywordToggle').prop('checked', config.keywords.enable || false);
+					$('#keywordsInput').val(config.keywords?.words || "");
+				}
+
+				// 屏蔽字设置
+				if (config.blockwords) {
+					$('#blockwordToggle').prop('checked', config.blockwords.enable || false);
+					$('#blockwordsInput').val(config.blockwords?.words || "");
+				}
+
+				// 生成频道配置
+				if (config.channelConfig && config.channelConfig.length > 0) {
+					// 生成语音频道配置
+					$('#voiceChannelConfig').html(generateChannelConfig(config.channelConfig, 'voice'));
+					// 生成日志频道配置
+					$('#logChannelConfig').html(generateChannelConfig(config.channelConfig, 'log'));
+					// 隐藏0C频道的语音开关及其所在的行
+					$('#voice_0C_switch1').closest('.channel-item').hide();
+					// 隐藏io和zs的大模型辅助聊天开关
+					$('#log_io_llm').closest('.col-md-4').hide();
+					$('#log_zs_llm').closest('.col-md-4').hide();
+					// 0C和0D的大模型辅助聊天开关需要同时操作
+					$('#log_0C_llm, #log_0D_llm').change(function() {
+						const isChecked = $(this).prop('checked');
+						$('#log_0C_llm, #log_0D_llm').prop('checked', isChecked);
+					});
+					// 设置频道播读按钮不能同时打开
+					bindVoiceSwitchExclusiveLogic();
+
+					// 设置频道配置的值
+					config.channelConfig.forEach(channel => {
+						const channelId = channel.channel;
+
+						// 设置语音开关
+						$(`#voice_` + channelId + `_switch1`).prop('checked', channel.switch1 || false);
+						$(`#voice_` + channelId + `_switch2`).prop('checked', channel.switch2 || false);
+
+						// 设置日志开关
+						$(`#log_` + channelId + `_logEnabled`).prop('checked', channel.logEnabled || false);
+						$(`#log_` + channelId + `_llm`).prop('checked', channel.llm || false);
+					});
+
+					// 在语音提示设置和聊天记录设置底部添加删除按钮区域
+					addDeleteButtonsArea(config.channelConfig);
+				}
+
+				// 根据记录周期显示/隐藏周起始日选择框
+				if (config.logPeriod === 2) {
+					$('#weekStartDayContainer').show();
+				} else {
+					$('#weekStartDayContainer').hide();
+				}
+
+				console.log('配置数据已成功填充到表单');
+			} catch (error) {
+				console.error('解析配置数据时出错:', error);
+				showAlert('解析配置数据时出错: ' + error.message, 'danger');
+			}
+		}
+
+		// 显示提示消息
+		function showAlert(message, type) {
+			const alertClass = type === 'success' ? 'alert-success' : 'alert-danger';
+			const alertId = 'alert-' + Date.now();
+			const alertHtml = `<div id="` + alertId + `" class="alert ` + alertClass + ` alert-dismissible fade show custom-alert" role="alert">` + message + `<button type="button" class="close" data-dismiss="alert"><span>&times;</span></button></div>`;
+			$('body').append(alertHtml);
+			setTimeout(() => { $('#' + alertId).alert('close'); }, 3000);
+		}
+
+		// 添加删除按钮区域
+		function addDeleteButtonsArea(channels) {
+			// 生成删除按钮
+			const deleteButtonsHtml = channels.map(channel => `
+				<button type="button" class="btn btn-outline-danger btn-sm delete-channel-btn"
+						data-channel="` + channel.channel + `" data-channelname="` + channel.channelName + `">
+					<i class="fas fa-times mr-1"></i>` + channel.channelName + `
+				</button>
+			`).join('');
+
+			// 插入到删除按钮容器中
+			$('#deleteChannelButtons').html(deleteButtonsHtml);
+
+			// 绑定删除按钮事件
+			$('.delete-channel-btn').click(function() {
+				const channel = $(this).data('channel');
+				const channelName = $(this).data('channelname');
+
+				// 删除对应频道的所有配置项
+				$('#voice_' + channel + '_switch1').closest('.channel-item').remove();
+				$('#log_' + channel + '_logEnabled').closest('.channel-item').remove();
+				$(this).remove();
+
+				showAlert('已删除频道 ' + channelName + ' 的所有配置', 'success');
+			});
+		}
+
+		// ===== 目录选择器(记录文件地址) =====
+		function escapeHtml(str) {
+			return $('<div>').text(str || '').html();
+		}
+
+		// 打开目录选择器,从当前输入框路径开始浏览
+		$('#browseDirBtn').on('click', function() {
+			$('#dirPickerModal').modal('show');
+			loadDir($('#defaultFilePath').val() || "");
+		});
+
+		// 加载并渲染目录列表
+		function loadDir(path) {
+			$('#dirList').html('<div class="p-3 text-center text-muted">加载中...</div>');
+			$.ajax({
+				url: '/ListDirectory',
+				type: 'POST',
+				contentType: 'application/json',
+				data: JSON.stringify({ path: path }),
+				success: function(res) {
+					if (res.result !== 'success') {
+						$('#dirList').html('<div class="p-3 text-center text-danger">' + escapeHtml(res.message || '读取目录失败') + '</div>');
+						return;
+					}
+					$('#dirCurrentPath').text(res.current);
+					const dirs = res.directories || [];
+					let html = '';
+					// 上级目录
+					if (res.parent) {
+						html += '<div class="dir-item" data-path="' + escapeHtml(res.parent) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #e9ecef;">'
+							+ '<i class="fas fa-level-up-alt mr-2 text-secondary"></i>..</div>';
+					}
+					if (dirs.length === 0 && !res.parent) {
+						html += '<div class="p-3 text-center text-muted">(空目录)</div>';
+					}
+					dirs.forEach(function(d) {
+						html += '<div class="dir-item" data-path="' + escapeHtml(res.current + '\\' + d) + '" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #e9ecef;" title="' + escapeHtml(d) + '">'
+							+ '<i class="fas fa-folder mr-2 text-warning"></i>' + escapeHtml(d) + '</div>';
+					});
+					$('#dirList').html(html);
+					$('#dirList .dir-item').on('click', function() {
+						loadDir($(this).data('path'));
+					});
+				},
+				error: function(xhr, status, error) {
+					$('#dirList').html('<div class="p-3 text-center text-danger">' + escapeHtml(error) + '</div>');
+				}
+			});
+		}
+
+		// 选择当前目录写入输入框
+		$('#dirPickBtn').on('click', function() {
+			const path = $('#dirCurrentPath').text();
+			if (path && path !== '加载中...') {
+				$('#defaultFilePath').val(path);
+				$('#dirPickerModal').modal('hide');
+				showAlert('已选择目录', 'success');
+			}
+		});
+	</script>
+</body>
+</html>
