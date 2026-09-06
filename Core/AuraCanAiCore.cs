@@ -1734,6 +1734,33 @@ public class AuraCanAiCore : IDisposable
 						t["id"]?.ToString() ?? ""));
 				}
 			}
+			// DeepSeek(v4-flash)偶发把工具调用输出成 XML 文本而非标准 tool_calls(如
+			// <tool_calls><invoke name="rp_body_action"><parameter name="action" string="true">sit</parameter>…</invoke></tool_calls>)。
+			// 此时标准解析 calls 为空 → 整条被当垃圾丢弃 → 动作不执行、前置台词也丢。
+			// 修复:识别并恢复为结构化调用(剥 XML 块,保留前缀文本当台词)。
+			if (calls.Count == 0 && !string.IsNullOrEmpty(content) && LeakedToolCallHint(content))
+			{
+				var restored = TryParseLeakedToolCalls(content, out var rest);
+				if (restored.Count > 0)
+				{
+					content = rest; // 剥掉 XML 块后的剩余(通常为前置台词;纯动作轮为空)
+					calls = restored;
+					if (msg != null)
+					{
+						msg["content"] = rest; // 同步 assistant 消息本体
+						var arr = new JArray();
+						foreach (var (n, a, id) in restored)
+							arr.Add(new JObject
+							{
+								["id"] = id,
+								["type"] = "function",
+								["function"] = new JObject { ["name"] = n, ["arguments"] = a ?? "{}" },
+							});
+						msg["tool_calls"] = arr;
+					}
+					Log($"LLM 工具调用泄漏已恢复: 解析到 {restored.Count} 个调用,剩余台词 {(string.IsNullOrEmpty(content) ? "(空,纯动作)" : $"'{content.Substring(0, Math.Min(content.Length, 40))}…'")}");
+				}
+			}
 			return (content, calls, msg ?? new JObject());
 		}
 		catch (Exception e)
@@ -1896,6 +1923,49 @@ public class AuraCanAiCore : IDisposable
 		|| text.Contains("<parameter", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("rp_body_action", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("tool_calls", StringComparison.OrdinalIgnoreCase);
+
+	/// <summary>是否含可尝试恢复的 XML 工具块(标准 <invoke> 结构)。宽松判定,避免把正常台词误伤。</summary>
+	private static bool LeakedToolCallHint(string text)
+		=> text.Contains("<invoke", StringComparison.OrdinalIgnoreCase)
+		|| text.Contains("<tool_calls", StringComparison.OrdinalIgnoreCase);
+
+	/// <summary>把模型误写成文本的 XML 工具调用恢复为结构化列表。
+	/// 兼容格式(带/不带引号、参数可带 string="true" 等属性、可跨行):
+	///   &lt;tool_calls&gt;&lt;invoke name="rp_body_action"&gt;
+	///     &lt;parameter name="action" string="true"&gt;sit&lt;/parameter&gt;
+	///     &lt;parameter name="target" string="true"&gt;#8&lt;/parameter&gt;
+	///   &lt;/invoke&gt;&lt;/tool_calls&gt;
+	/// 返回解析出的调用(name, argsJson, 生成的唯一 id);剩余文本(rest)已把 XML 块剥掉(保留前置台词)。
+	/// 解析不到任何 invoke → 返回空列表(调用方按原逻辑丢弃)。</summary>
+	private static List<(string name, string? args, string id)> TryParseLeakedToolCalls(string content, out string rest)
+	{
+		var result = new List<(string, string?, string)>();
+		// 1) 剥掉 <tool_calls> 外壳与所有 <invoke>…</invoke> 块,剩纯文本
+		rest = Regex.Replace(content, @"<\s*tool_calls\s*>.*?<\s*/\s*tool_calls\s*>", "", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+		rest = Regex.Replace(rest, @"<\s*invoke\b.*?<\s*/\s*invoke\s*>", "", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+		rest = Regex.Replace(rest, @"<\s*parameter\b.*?<\s*/\s*parameter\s*>", "", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+		rest = Regex.Replace(rest, @"<\s*/?\s*(?:tool_calls|invoke|parameter)\s*>", "", RegexOptions.IgnoreCase);
+		rest = rest.Trim();
+		// 2) 逐个提取 invoke 块
+		var invokeRe = new Regex(@"<\s*invoke\s+name\s*=\s*[""']?([A-Za-z0-9_]+)[""']?[^>]*>([\s\S]*?)<\s*/\s*invoke\s*>", RegexOptions.IgnoreCase);
+		var paramRe = new Regex(@"<\s*parameter\s+name\s*=\s*[""']?([A-Za-z0-9_]+)[""']?[^>]*>([\s\S]*?)<\s*/\s*parameter\s*>", RegexOptions.IgnoreCase);
+		var idx = 0;
+		foreach (Match inv in invokeRe.Matches(content))
+		{
+			var name = inv.Groups[1].Value.Trim();
+			if (name.Length == 0) continue;
+			var j = new JObject();
+			foreach (Match p in paramRe.Matches(inv.Groups[2].Value))
+			{
+				var pn = p.Groups[1].Value.Trim();
+				var pv = System.Net.WebUtility.HtmlDecode(p.Groups[2].Value.Trim());
+				if (pn.Length == 0) continue;
+				j[pn] = pv;
+			}
+			result.Add((name, j.Count > 0 ? j.ToString(Formatting.None) : "{}", $"leak_txt_{idx++}"));
+		}
+		return result;
+	}
 
 	/// <summary>发送助手台词:回复跟随触发消息的来源频道(channelNo),无任何 /s 兜底;
 	/// 悄悄话 0D 用 /t 回复对方(replyAddress=名字@服务器);频道无对应命令/缺回复地址时丢弃该台词(不入历史)。

@@ -345,6 +345,11 @@ XivChatType 十六进制两位 = 频道号:0A=说话 /s、0E=小队 /p、18=部�
   ~~避让升级多跳(ComputePath:逐段找挡路矩形→沿起点反方向推出绕出点→最多6跳,Queue 存路点,目标移动>0.6m 清空重排)~~
   ~~2026-09-06:避让调试定稿:侧边弧线(SideArc):挑较近一侧、外侧 0.55m…~~
 - 2026-09-06:乱码修复——模型在"补台词轮(tools 关闭)"把 <tool_calls><invoke rp_body_action>… 当文本输出;补台词提示加"严禁调用工具/输出标签",并加 LooksLikeToolLeak 过滤(命中即丢弃不发送不进历史)。
+- 2026-09-06(下午2):**工具调用文本泄漏升级为"恢复"而非"丢弃"**(用户反馈日志里 LLM 回复丢弃):DeepSeek(v4-flash)偶发不返回标准 tool_calls,而把工具写成 XML 文本放 content(Anthropic 风格 <tool_calls><invoke name=…><parameter name=… string="true">…</parameter></invoke></tool_calls>)。旧行为整条丢弃 → 动作不执行(冷场)、有前置台词时台词也丢。新逻辑(SendBodyChatAsync 解析处):
+  - LeakedToolCallHint 宽松判定(content 含 <invoke/<tool_calls);TryParseLeakedToolCalls 用正则提取 invoke 块与 parameter(name→值,HtmlDecode,兼容带/不带引号、跨行、string="true" 属性),生成伪 id(leak_txt_N),把 XML 块从 content 剥掉留下前置台词;
+  - 恢复成功 → content=剩余台词(纯动作轮为空)+ calls 非空 + 同步改 asst 的 msg["tool_calls"];走既有流程(hasAction→ExecuteBodyAction + 有台词发台词/无台词补台词轮);纯动作泄漏也能执行并自动补台词,不再冷场;
+  - 恢复失败(无 invoke)→ 维持原丢弃逻辑(AppendAssistantAndEcho 内 LooksLikeToolLeak 兜底不变)。
+  - 单测过 4 种样本:纯动作泄漏/台词+动作泄漏/无引号变体/lookup_player。⚠️ 待实机:新 build 后重测 sit 动作泄漏是否真的执行+补台词,把 xllog 里 "LLM 工具调用泄漏已恢复" 行发我。
 
 ## 2026-09-06(下午)寻路重做:2D 栅格 A* + 前瞻圆弧跟随(替代全部旧避障,待实机验证)
 - **背景**:旧 SideArc 绕行在真实场景反复失败(绕点全在脚下/方向反向/每帧刷日志死循环)。日志实测定位:13:42 改的源码未重新 build,测试跑的是旧 DLL(详见 danmud.log 13:39 build vs 13:42 源)。但即使 build 后旧几何绕行思路仍脆弱 → 整体重写。
@@ -366,7 +371,7 @@ XivChatType 十六进制两位 = 频道号:0A=说话 /s、0E=小队 /p、18=部�
 整体目标:人设驱动 RP 机器人,能力=读聊天/回话(频道跟随+悄悄话)+ 移动内核(走/坐/绕障)+ LLM 身体演出(rp_body_action 多轮工具)。项目唯一,D:\AuraCanAI.Dalamud,git 仍 0 commit(未做存档,建议新会话先 git init commit + 备份 zip)。
 
 ## 已完成且(基本)验证
-- 回复:随来源频道,0D→/t;拟真延迟调度(静默2~5s攒条,MaxWait12s);无人设=不触发AI;台词回显去重;工具调用泄漏文本过滤(LooksLikeToolLeak)。
+- 回复:随来源频道,0D→/t;拟真延迟调度(静默2~5s攒条,MaxWait12s);无人设=不触发AI;台词回显去重;工具泄漏文本=恢复为结构化调用执行(2026-09-06 下午2 起,见上;不再整条丢弃)。
 - LLM:身体演出默认(有人设即启用);工具=rp_body_action(approach/follow/leave/face/stop/sit)+lookup_player+list_seats;多轮/并行 tool_calls 都支持(每 id 回填);场景注入精简。
 - 坐:记录点法——/aca seatadd(坐下记录,房子分组自动带房间) 网页场景设定(房子页签/座位改删/小地图#id/已校准标记);执行 /aca seatgo [名字|#id|空=最近] 或 行为 sit 或 LLM sit;走向记录点(0 距离)+ /sit(SeatSitCommand),坐下后偏差≤0.35 判坐正,歪→起立→朝目标走1m→停0.6s→再坐(共2次);站距迁移到 0。
 - 障碍:网页拖拽画矩形(ObstacleRect,按房子/房间);/aca 无碍命令。**寻路=2026-09-06 下午已重写**:NavPathPlanner(2D 栅格 A*+LOS 拉直,纯逻辑可单测)+ MovementController 前瞻跟随(见上方 2026-09-06(下午)段落),旧 ComputePath/SideArc 已删。纯逻辑场景验证通过,**待实机**。
