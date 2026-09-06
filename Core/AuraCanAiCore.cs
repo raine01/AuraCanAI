@@ -1024,7 +1024,12 @@ public class AuraCanAiCore : IDisposable
 		return MathF.Sqrt(dx * dx + dz * dz);
 	}
 
-	/// <summary>该座位记录点是否已被别的玩家占(0.6m 内有人)。</summary>
+	/// <summary>该座位记录点是否已被别的玩家占。
+	/// 半径用 0.4m 而非 0.6m:一排座椅的记录点间距通常恰好 0.6m,若占用半径 ≥0.6,
+	/// 坐在相邻座(7/9)的人会落入中间空座(#8)的判定圈 → 中间座被误判“有人”(2026-09-06 实机踩坑)。
+	/// 落座本人与记录点偏差 ≤0.35(坐正判定阈值),0.4 足以认定本座有人且不碰邻座。</summary>
+	private const float SeatOccupiedRadius = 0.4f;
+
 	private bool IsSeatOccupied(SeatPoint seat)
 	{
 		var local = _objectTable.LocalPlayer;
@@ -1034,7 +1039,7 @@ public class AuraCanAiCore : IDisposable
 			if (local != null && o.GameObjectId == local.GameObjectId) continue;
 			var dx = o.Position.X - seat.X;
 			var dz = o.Position.Z - seat.Z;
-			if (dx * dx + dz * dz <= 0.6f * 0.6f) return true;
+			if (dx * dx + dz * dz <= SeatOccupiedRadius * SeatOccupiedRadius) return true;
 		}
 		return false;
 	}
