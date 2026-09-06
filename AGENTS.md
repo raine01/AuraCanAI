@@ -340,9 +340,27 @@ XivChatType 十六进制两位 = 频道号:0A=说话 /s、0E=小队 /p、18=部�
 - **障碍矩形**:ObstacleRect{Id,HouseId,Name,TerritoryId,MinX/MinZ/MaxX/MaxZ};配置 Obstacles;网页场景设定小地图上"✏️画障碍"拖拽画矩形(世界坐标轴对齐;可命名/留空;列表改名/删除);SaveObstaclesJson 按房子替换(记录时当前房间为 TerritoryId);SaveHouses 删房子连带删障碍;GetSeatMap/GetSeats 均返回 obstacles。
 - **避让**:MovementController.AvoidObstacles(2D slab 线段-扩边矩形相交;挡住时沿起点→中心反方向推算出边界外 0.3m 的出逃点)应用到 approach/follow/move 的目标点与坐流程 Walk/StandUp 的目标点(leave 未接)。margin 0.4。
 - ⚠️ 待实机:拖拽坐标→世界换算方向(X 右/Z 下,与地图一致);避让绕行是否顺滑(出逃点单跳法,复杂摆位可能绕不好,需要时再升级为多跳/沿边)。list_obstacles 已可读真实数据。
-- 2026-09-06 早:vnavmesh 参考源码(_ref)已删(仅参考,曾不入编译/git);避让升级多跳(ComputePath:逐段找挡路矩形→沿起点反方向推出绕出点→最多6跳,Queue 存路点,目标移动>0.6m 清空重排);移除 list_obstacles 工具(障碍只用于避让);确认当前=路线3(直线+本地多跳避障,无 vnavmesh 寻路)。
-- 2026-09-06:避让调试定稿:侧边弧线(SideArc):挑较近一侧、外侧 0.55m,先平移到侧通道(不倒走)再升到 max(障碍顶,目标Z)+0.55 高度,从上方绕进目标;路点弹出阈值 0.25(曾 0.4 导致 0.35m 路点被误弹原地打转);已在通道时不重复塞自己当路点。仍会交替重建同一条绕行路线 → 查看是否“路点被提前弹出/路点距离过近”。
+- 2026-09-06 早:vnavmesh 参考源码(_ref)已删(仅参考,曾不入编译/git);❌ 以下旧避让方案已全部废弃(勿恢复):
+  ComputePath 多跳/SideArc 侧边弧线/AvoidObstacles 出逃点/换侧绕行(_avoidSide/_avoidFlipped/_avoidWaypoints)——已被下方 2026-09-06 下午 A* 寻路整体替换;
+  ~~避让升级多跳(ComputePath:逐段找挡路矩形→沿起点反方向推出绕出点→最多6跳,Queue 存路点,目标移动>0.6m 清空重排)~~
+  ~~2026-09-06:避让调试定稿:侧边弧线(SideArc):挑较近一侧、外侧 0.55m…~~
 - 2026-09-06:乱码修复——模型在"补台词轮(tools 关闭)"把 <tool_calls><invoke rp_body_action>… 当文本输出;补台词提示加"严禁调用工具/输出标签",并加 LooksLikeToolLeak 过滤(命中即丢弃不发送不进历史)。
+
+## 2026-09-06(下午)寻路重做:2D 栅格 A* + 前瞻圆弧跟随(替代全部旧避障,待实机验证)
+- **背景**:旧 SideArc 绕行在真实场景反复失败(绕点全在脚下/方向反向/每帧刷日志死循环)。日志实测定位:13:42 改的源码未重新 build,测试跑的是旧 DLL(详见 danmud.log 13:39 build vs 13:42 源)。但即使 build 后旧几何绕行思路仍脆弱 → 整体重写。
+- **新模块 Core/Movement/NavPathPlanner.cs(纯逻辑,无 Dalamud 依赖,已建独立单测工程 D:\navtest 验证过):
+  - 2D 栅格 A*(cell 0.2m),障碍=当前房间手画矩形(ObstacleRect→NavObstacle),按 **Pad=0.4m** 膨胀后标阻塞格(⚠️勿调大:桌旁座位区常仅 0.4m,过大把真实起/终点站格包进阻塞区→无解);8 邻域+禁止斜穿墙角;PriorityQueue A*,窗口=全部膨胀障碍+起终点外扩缓冲(超 600 格自动裁剪)。
+  - 路径拉直(Straighten):贪心 LOS(线段-膨胀矩形 Slab 检测),去掉锯齿格点→少量直线拐点。
+  - **边界处理(实机教训,勿删)**:①起点格强制可达;起点在真实家具矩形内(坐姿起身/矩形画大)→ BFS 挤出到最近自由格打通 1 格宽通道(上限8格);②终点在真实家具内→外推到最近自由格(上限6格),世界路径以该格收尾,**不加回原终点**(避免末段穿家具);③终点仅被膨胀盖住(贴家具站/坐)→解除终点格+4邻阻塞(真实矩形外部分);④障碍围死→返回 null。
+  - 快速路径:无障碍或起终点 LOS 直通→直接两点,不走栅格。
+- **MovementController 改为前瞻跟随(替代旧 ComputePath/换侧)**:
+  - SteerToward(myPos,goal):维护 _pathPts 折线路径;失效条件=无路径/目标位移>0.5m/玩家偏离路径>1m;重规划节流 0.15s;无解→直线试走由卡住检测收尾。
+  - LookAheadPoint:把玩家投影到路径上,取**前方 PathLookAhead=1.2m 的点**作为 MovementOverride.DesiredPosition → 角色朝路径前方一点走,过拐点前自然转弧,不停顿不卡角(平滑流畅的关键)。
+  - 卡住检测:0.6s 无位移→强制重排一次(_stuckRetried)仍卡才 Finish Stuck(坐流程 0.5s/0.12m 同规则 SeatMoveStuck)。
+  - 应用到 approach/follow/move/sit 的 Walk 与 StandUp 走位(leave 仍直线远离不寻路)。
+- **删除**:ComputePath/FindBlocking/SideArc/Slab/_avoidWaypoints/_avoidSide/_avoidFlipped/_routeGoal;NavPathPlanner 内含自己的 Slab/LOS(勿删)。
+- **验证过的纯逻辑场景**(D:\navtest\Program.cs 可重跑):日志场景(4.08,5.16)→座位(1.70,3.09)绕桌 X1.3~3.7 Z3.5~4.8 = 先出膨胀→沿右(x≈4.2)→下(z≈2.99)→横进,正确;双桌窄通道/无障碍直连/终点入家具外推/L 形墙/沙发+茶几布局/窄缝/5 桌阵列 全部有解。
+- ⚠️ **待实机验证**:①日志同场景走近 奥·乌儿/去坐,应平滑绕桌不停顿;**把 xllog 寻路段日志发我**;②站定点=座位点(距桌 0.4m 内)时 A* 贴边到达后再 /sit 是否坐正;③lookahead 1.2m 转弯半径是否够(不够把配置化,勿写死)。
 
 # ===== 交接记录 2026-09-06(新会话先读这一段) =====
 整体目标:人设驱动 RP 机器人,能力=读聊天/回话(频道跟随+悄悄话)+ 移动内核(走/坐/绕障)+ LLM 身体演出(rp_body_action 多轮工具)。项目唯一,D:\AuraCanAI.Dalamud,git 仍 0 commit(未做存档,建议新会话先 git init commit + 备份 zip)。
@@ -351,14 +369,14 @@ XivChatType 十六进制两位 = 频道号:0A=说话 /s、0E=小队 /p、18=部�
 - 回复:随来源频道,0D→/t;拟真延迟调度(静默2~5s攒条,MaxWait12s);无人设=不触发AI;台词回显去重;工具调用泄漏文本过滤(LooksLikeToolLeak)。
 - LLM:身体演出默认(有人设即启用);工具=rp_body_action(approach/follow/leave/face/stop/sit)+lookup_player+list_seats;多轮/并行 tool_calls 都支持(每 id 回填);场景注入精简。
 - 坐:记录点法——/aca seatadd(坐下记录,房子分组自动带房间) 网页场景设定(房子页签/座位改删/小地图#id/已校准标记);执行 /aca seatgo [名字|#id|空=最近] 或 行为 sit 或 LLM sit;走向记录点(0 距离)+ /sit(SeatSitCommand),坐下后偏差≤0.35 判坐正,歪→起立→朝目标走1m→停0.6s→再坐(共2次);站距迁移到 0。
-- 障碍:网页拖拽画矩形(ObstacleRect,按房子/房间);/aca 无碍命令。避让=ComputePath 多跳 + SideArc 侧边弧线(最近侧 x ± clear0.55;上下绕向按目标在障碍上/下/侧决定——**本次刚改,未实机验证**)。
+- 障碍:网页拖拽画矩形(ObstacleRect,按房子/房间);/aca 无碍命令。**寻路=2026-09-06 下午已重写**:NavPathPlanner(2D 栅格 A*+LOS 拉直,纯逻辑可单测)+ MovementController 前瞻跟随(见上方 2026-09-06(下午)段落),旧 ComputePath/SideArc 已删。纯逻辑场景验证通过,**待实机**。
 - 走路模式=写 Control.IsWalking;卡住判定0.6s;坐流程 0.5s。
 
 ## 待办/未验证(新窗口优先)
-1. **避让最终验证**:刚改"SideArc 上下绕向按目标位置(zExit=目标在障碍下则下边过,否则上边/近侧)",编译过,**未实机测**。此前历次失败样本:①正对障碍算到脚下原地转(已修:候选/弹出阈值0.25/不塞自己)②目标在障碍下方却永远往上方绕导致撞上边死路/墙角(本次修,目标在下应走下方)③偶发"绕点全在脚下放弃"。验证场景:角色(4.08,5.16)右上→座位(1.70,3.09)左下(桌子 X1.3~3.7 Z3.5~4.8),期望沿右通道向下到 z≈2.95 再横进。
-2. 若仍不稳:再讨论 vnavmesh IPC(笔记有 IPC 接口清单;需装 vnavmesh)。
+1. **A* 寻路实机验证(2026-09-06 下午重写,新窗口第一优先)**:日志同场景——走近 奥·乌儿/去坐,目标(1.70,3.09)桌左下(桌 X1.3~3.7 Z3.5~4.8);期望沿右通道平滑绕行不停顿。失败把 xllog 寻路段发我。验证点:绕行轨迹弧度、贴桌坐位(0.4m 内)站定后再 /sit、直线无障直走不抖、目标玩家走动时重规划不卡。
+2. 若 A* 仍不稳:再讨论 vnavmesh IPC(笔记有 IPC 接口清单;需装 vnavmesh)。
 3. 椅子边缘细节:多人椅占用、斜家具矩形不支持(轴对齐)。
-4. 存档:git 0 commit;_ref 已删。务必 commit+zip。
+4. 存档:git 已有初始 commit(2026-09-06 下午);_ref/ffxiv_navmesh 已重新克隆(不入库,_ref 在 .gitignore)。改动后务必 commit;备份 zip 待验证后再打。
 5. 后续打磨方向(用户提过):人设演出细节(走/坐台词时机、表情配合、座位占用圆场)。
 
 ## 易踩点速记

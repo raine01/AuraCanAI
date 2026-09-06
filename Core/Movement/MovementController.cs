@@ -90,11 +90,14 @@ public sealed class MovementController : IDisposable
 	private bool _finishedNotified = true; // 事件是否已通知(防重入)
 	// 走路模式:启动时若在跑步则直接写 Control.IsWalking=true 切走路,_walkForced=true;结束恢复(false)
 	private bool _walkForced;
-	// 障碍绕行侧向:0=自动选近侧;±1=强制左/右侧;卡住时自动换另一侧一次
-	private int _avoidSide;
-	private bool _avoidFlipped;
-	private readonly Queue<System.Numerics.Vector3> _avoidWaypoints = new();
-	private System.Numerics.Vector3 _routeGoal; // 当前路线的终点(目标移动>0.6m 则清空路线重排)
+	// ===== 路径(2026-09-06 重做:2D 栅格 A* + LOS 拉直 + 前瞻圆弧跟随) =====
+	private const float PathLookAhead = 1.2f; // 前瞻距离:朝路径上前方这么远的点走 → 转弯自然成圆弧,不停顿
+	private const float RepathGoalDelta = 0.5f; // 目标点位移超过此值 → 重规划(Approach/Follow 目标在动)
+	private const float RepathOffsetMax = 1.0f; // 玩家偏离当前路径超过此值 → 重规划(被撞开/抄了近路)
+	private DateTime _lastPathTime = DateTime.MinValue; // 重规划节流(防每帧抖动)
+	private List<System.Numerics.Vector3>? _pathPts; // 当前折线路径(世界坐标,首=起点 尾=终点;已拉直)
+	private System.Numerics.Vector3 _pathGoal; // 规划时的终点(目标动了则重规划)
+	private bool _stuckRetried; // 卡住后是否已强制重规划过一次(仍卡才真正停)
 	// ===== 坐(IntentKind.Sit):目标座位记录 + 阶段 =====
 	private enum SitPhase { Walk, Pause, TriggerSit, StandUp, Confirm, Done }
 	private SitPhase _sitPhase;
@@ -308,15 +311,15 @@ public sealed class MovementController : IDisposable
 	{
 		_startedAt = DateTime.Now;
 		_blockedSince = DateTime.MinValue;
-		_avoidWaypoints.Clear();
 		_lastPos = null;
 		_stuckSeconds = 0;
 		_finishedNotified = false;
 		_override.Active = false;
+		_pathPts = null;
+		_lastPathTime = DateTime.MinValue;
+		_stuckRetried = false;
 		// 走路模式:开启且当前不在走路 → 直接写 IsWalking=true(游戏走路切换的真实状态),结束恢复
 		_walkForced = _config.MovementUseWalkMode && _core.TrySetWalking(true);
-		_avoidSide = 0;
-		_avoidFlipped = false;
 		// 诊断:本次移动的当前房间障碍数
 		var obsN = _core.ObstaclesInCurrentRoom().Count;
 		if (obsN > 0) _log.Information($"移动开始: 当前房间障碍 {obsN} 个");
@@ -444,16 +447,16 @@ public sealed class MovementController : IDisposable
 		Vector3 desired;
 		if (_intent == IntentKind.Leave)
 		{
-			// 朝远离目标方向持续迈步
+			// 朝远离目标方向持续迈步(Leave 不绕障:远离通常不被挡;被挡由卡住检测收尾)
 			var away = PlaneNormalized(myPos - targetPos!.Value);
 			desired = myPos + away * 2f; // 每帧向远处推 2 米参考点(实际到 leaveDistance 即停)
+			_override.DesiredPosition = desired;
+			_override.Active = true;
 		}
 		else
 		{
-			desired = ComputePath(myPos, targetPos ?? _fixedDest, _avoidWaypoints);
+			if (!SteerToward(myPos, targetPos ?? _fixedDest)) return; // 寻路失败已 Finish
 		}
-		_override.DesiredPosition = desired;
-		_override.Active = true;
 
 		// 6) 卡住检测:激活移动但位置无明显前进
 		var now = DateTime.Now;
@@ -476,18 +479,14 @@ public sealed class MovementController : IDisposable
 				_lastPosAt = now;
 				if (_stuckSeconds >= _config.MovementStuckTimeoutSec)
 				{
-					// 卡住换侧:当前侧是死路(靠墙/死角)时自动换另一侧绕一次;换过仍卡才真正停下
-					var obs = _core.ObstaclesInCurrentRoom();
-					if (obs.Count > 0 && !_avoidFlipped)
+					// 卡住:重规划一次(可能被撞离/目标移动路径失效);仍卡才停
+					if (!_stuckRetried)
 					{
-						var ob = obs[0];
-						var near = MathF.Abs(myPos.X - ob.MinX) <= MathF.Abs(myPos.X - ob.MaxX) ? -1 : 1;
-						_avoidSide = -near;
-						_avoidFlipped = true;
-						_avoidWaypoints.Clear();
-						_stuckSeconds = 0;
+						_stuckRetried = true;
+						_pathPts = null; // 强制重排
 						_lastPos = null;
-						_log.Information("避障: 当前侧走不通,换另一侧绕行一次");
+						_stuckSeconds = 0;
+						_log.Information("避障: 疑似卡住,重新寻路一次");
 						return;
 					}
 					Finish(MoveOutcome.Stuck, $"已停滞 {_stuckSeconds:F0} 秒(可能被挡住)");
@@ -516,108 +515,20 @@ public sealed class MovementController : IDisposable
 		}
 		if ((now - _seatMoveLastAt).TotalSeconds >= 0.5)
 		{
-			// 卡住换侧(坐流程走位同规则):只允许换一次
-			if (_core.ObstaclesInCurrentRoom().Count > 0 && !_avoidFlipped)
+			// 卡住:强制重规划一次仍卡才结束(坐流程 0.5s 没动基本就是被挡死)
+			if (!_stuckRetried)
 			{
-				_avoidSide = _avoidSide >= 0 ? -1 : 1;
-				_avoidFlipped = true;
-				_avoidWaypoints.Clear();
+				_stuckRetried = true;
+				_pathPts = null;
 				_seatMoveLastPos = myPos;
 				_seatMoveLastAt = now;
-				_log.Information("避障(坐): 当前侧走不通,换另一侧绕行一次");
+				_log.Information("避障(坐): 疑似卡住,重新寻路一次");
 				return false;
 			}
 			Finish(MoveOutcome.Failed, "走去座位被卡住(0.5 秒未移动)");
 			return true;
 		}
 		return false;
-	}
-
-	/// <summary>障碍避让(多跳):逐段检测 起点→终点 是否穿过任一(扩边)障碍矩形;
-	/// 挡了就沿"起点→障碍中心"反方向推算出边界外的绕出点作为中间路点,继续检测 绕出点→终点…最多 6 跳。
-	/// 返回绕行路点(终点前的中间点);走完返回终点。</summary>
-	private System.Numerics.Vector3 ComputePath(System.Numerics.Vector3 start, System.Numerics.Vector3 goal, Queue<System.Numerics.Vector3> waypoints)
-	{
-		// 目标移动过远 → 丢弃旧路点重新排
-		if (waypoints.Count > 0 && PlaneDistance(goal, _routeGoal) > 0.6f) waypoints.Clear();
-		if (waypoints.Count > 0 && PlaneDistance(start, waypoints.Peek()) <= 0.4f) waypoints.Dequeue();
-		if (waypoints.Count == 0)
-		{
-			_routeGoal = goal;
-			var cur = start;
-			for (int hop = 0; hop < 6; hop++)
-			{
-				if (!FindBlocking(cur, goal, out var o)) break;
-				var pts = SideArc(cur, goal, o);
-				var player = _objectTable.LocalPlayer;
-				var posS = player != null ? $"({player.Position.X:F2},{player.Position.Z:F2})" : "?";
-				if (pts == null)
-				{
-					_log.Information($"避障: 撞到 {o.Label()} 但绕点全在脚下,放弃 | 我{posS} cur{cur.ToString("F2")}→goal{goal.ToString("F2")} 障碍X{o.MinX:F1}~{o.MaxX:F1} Z{o.MinZ:F1}~{o.MaxZ:F1}");
-					break;
-				}
-				foreach (var p in pts) waypoints.Enqueue(p);
-				_log.Information($"避障: 撞到 {o.Label()} (X{o.MinX:F1}~{o.MaxX:F1} Z{o.MinZ:F1}~{o.MaxZ:F1}) 我{posS} cur{cur.ToString("F2")}→goal{goal.ToString("F2")} 绕行: {string.Join(" → ", pts.Select(p => p.ToString("F1")))}");
-				cur = pts[^1];
-			}
-			if (waypoints.Count == 0) _log.Verbose("避障: 起点到终点无阻挡");
-		}
-		return waypoints.Count > 0 ? waypoints.Peek() : goal;
-	}
-
-	/// <summary>当前房间(扩边 margin=0.4)中,线段 a→b 撞到的第一个障碍(按线段进入顺序取 t 最小者)。</summary>
-	private bool FindBlocking(System.Numerics.Vector3 a, System.Numerics.Vector3 b, out AuraCanAI.Dalamud.ObstacleRect hit)
-	{
-		hit = null!;
-		const float margin = 0.4f;
-		float bestT = 2f;
-		foreach (var o in _core.ObstaclesInCurrentRoom())
-		{
-			var minX = o.MinX - margin; var maxX = o.MaxX + margin;
-			var minZ = o.MinZ - margin; var maxZ = o.MaxZ + margin;
-			float tmin = 0, tmax = 1;
-			if (!Slab(a.X - b.X == 0 ? 0f : b.X - a.X, a.X, minX, maxX, ref tmin, ref tmax)) continue;
-			if (!Slab(a.Z - b.Z == 0 ? 0f : b.Z - a.Z, a.Z, minZ, maxZ, ref tmin, ref tmax)) continue;
-			if (tmax <= 0 || tmin >= 1) continue;
-			if (tmin < bestT) { bestT = tmin; hit = o; }
-		}
-		return hit != null;
-	}
-
-	/// <summary>侧边绕行弧线(不贴边,外侧半米左右自然绕):挑"起点更靠近的那一侧",在矩形外侧 clear 处定义弧点——先平移到该侧通道,再沿通道升到障碍后方。起点已贴得很近(无法平移)返回 null 表示绕不出。</summary>
-	private System.Collections.Generic.List<System.Numerics.Vector3>? SideArc(System.Numerics.Vector3 a, System.Numerics.Vector3 goal, AuraCanAI.Dalamud.ObstacleRect o)
-	{
-		const float clear = 0.55f; // 外侧余量:不贴边,半米左右弧线
-		// 左右侧:挑起点更近那侧(换侧时用 _avoidSide 强制)
-		var nearSide = MathF.Abs(a.X - o.MinX) <= MathF.Abs(a.X - o.MaxX) ? -1 : 1;
-		var sign = _avoidSide != 0 ? _avoidSide : nearSide;
-		var sideX = sign < 0 ? o.MinX - clear : o.MaxX + clear;
-		// 上下绕向:目标在障碍下方则从下边绕,在上方则从上边绕,在侧面则挑较近一边
-		float zExit;
-		if (goal.Z < o.MinZ) zExit = o.MinZ - clear;      // 目标在下方 → 从下边过
-		else if (goal.Z > o.MaxZ) zExit = o.MaxZ + clear; // 目标在上方 → 从上边过
-		else zExit = (goal.Z - o.MinZ < o.MaxZ - goal.Z) ? o.MinZ - clear : o.MaxZ + clear;
-		var onChannel = MathF.Abs(a.X - sideX) < 0.2f;
-		var list = new System.Collections.Generic.List<System.Numerics.Vector3>();
-		if (!onChannel)
-		{
-			// 先平移到侧向通道(保持当前 Z,不倒走)
-			var p1 = new System.Numerics.Vector3(sideX, a.Y, a.Z);
-			if (PlaneDistance(a, p1) >= 0.25f) list.Add(p1);
-		}
-		// 沿通道走到"障碍的下沿/上沿外侧",再横着进目标
-		var p2 = new System.Numerics.Vector3(sideX, a.Y, zExit);
-		if (PlaneDistance(a, p2) >= 0.25f) list.Add(p2);
-		return list.Count > 0 ? list : null; // 路点全在脚下 → 绕不出
-	}
-	private static bool Slab(float dir, float origin, float lo, float hi, ref float tmin, ref float tmax)
-	{
-		if (MathF.Abs(dir) < 1e-6f) return origin >= lo && origin <= hi; // 平行且不在带内 = 不交
-		var t1 = (lo - origin) / dir; var t2 = (hi - origin) / dir;
-		if (t1 > t2) (t1, t2) = (t2, t1);
-		tmin = MathF.Max(tmin, t1);
-		tmax = MathF.Min(tmax, t2);
-		return tmin <= tmax;
 	}
 
 	/// <summary>坐流程:走(到座前参考点)→ 稍停 → 触发坐法(宏或指令)→ 落座确认 → SatDown 结束。</summary>
@@ -635,7 +546,7 @@ public sealed class MovementController : IDisposable
 		}
 		switch (_sitPhase)
 		{
-			case SitPhase.Walk:
+		case SitPhase.Walk:
 			{
 				if (SeatMoveStuck(myPos, now)) return; // 走路 0.5s 没动 → 卡住(Finish 在内部已处理)
 				var d = PlaneDistance(myPos, _sitApproach);
@@ -645,11 +556,7 @@ public sealed class MovementController : IDisposable
 					_sitStageAt = now;
 					_override.Active = false;
 				}
-				else
-				{
-					_override.DesiredPosition = ComputePath(myPos, _sitApproach, _avoidWaypoints);
-					_override.Active = true;
-				}
+				else if (!SteerToward(myPos, _sitApproach)) return; // 寻路失败已 Finish
 				break;
 			}
 			case SitPhase.Pause:
@@ -720,15 +627,113 @@ public sealed class MovementController : IDisposable
 				}
 				else
 				{
-					_override.DesiredPosition = ComputePath(myPos, goal, _avoidWaypoints);
-					_override.Active = true;
+					if (!SteerToward(myPos, goal)) return; // 寻路失败已 Finish
 				}
 				break;
 			}
 		}
 	}
 
-	/// <summary>到达社交距离:停止移动;需要时选中目标(角色站定后自动转向面向对方)</summary>
+	/// <summary>核心寻路+跟随:维护当前点到目标点的折线路径 _pathPts,并把覆盖目标设为"路径上前方 PathLookAhead 的点"。
+	/// 朝前瞻点走 → 接近拐点前就开始转,轨迹是自然圆弧,不像旧版"走到拐点再急转/卡死"。
+	/// 路径失效条件:无路径 / 目标位移&gt;0.5m / 玩家偏离路径&gt;1m;满足才重规划(节流 0.15s,防每帧抖动)。
+	/// 返回 false = 已 Finish(调用方直接 return)。</summary>
+	private bool SteerToward(System.Numerics.Vector3 myPos, System.Numerics.Vector3 goal)
+	{
+		var needRepath = _pathPts == null
+			|| PlaneDistance(goal, _pathGoal) > RepathGoalDelta
+			|| DeviationFromPath(myPos) > RepathOffsetMax;
+		if (needRepath && (DateTime.Now - _lastPathTime).TotalSeconds > 0.15)
+		{
+			var obstacles = _core.ObstaclesInCurrentRoom()
+				.Select(o => new NavObstacle(o.MinX, o.MinZ, o.MaxX, o.MaxZ)).ToList();
+			var path = NavPathPlanner.FindPath(myPos, goal, obstacles);
+			_lastPathTime = DateTime.Now;
+			if (path == null || path.Count < 2)
+			{
+				// 无解(目标在障碍内且无法外推/被围死):直线试走一次,由卡住检测收尾(重排一次仍卡才停)
+				_pathPts = null;
+				_log.Information("寻路: 无解,直线试走(若被挡将自动停下)");
+				_override.DesiredPosition = goal;
+				_override.Active = true;
+				return true;
+			}
+			_pathPts = path;
+			_pathGoal = goal;
+			if (path.Count > 2) _log.Verbose($"寻路: {path.Count - 2} 个中间点,总长 {PathLength(path):F1}m");
+		}
+
+		if (_pathPts == null) return true; // 节流中暂无路径,本帧直走目标已由上面设置;避免空引用
+		_override.DesiredPosition = LookAheadPoint(myPos, _pathPts, goal);
+		_override.Active = true;
+		return true;
+	}
+
+	/// <summary>沿折线路径取"距玩家前方 PathLookAhead 米"的点(不足则取终点)。
+	/// 通过把玩家投影到路径上再向前走弧长实现;玩家轻微偏离时投影仍稳定。</summary>
+	private System.Numerics.Vector3 LookAheadPoint(System.Numerics.Vector3 myPos, List<System.Numerics.Vector3> path, System.Numerics.Vector3 goal)
+	{
+		if (path.Count == 1) return goal;
+		// 找玩家在路径上的最近段(索引 i)与弧长位置
+		var (seg, t, dist) = NearestOnPath(myPos, path);
+		if (dist > RepathOffsetMax * 2f) return path[^1]; // 偏离异常(不应出现,防抖)
+		var segLen = SegmentLen(path[seg], path[seg + 1]);
+		if (segLen < 1e-4f) return goal; // 防御:零长度段
+		// 沿路径从 (seg,t) 向前累计弧长到 PathLookAhead
+		var remaining = PathLookAhead - segLen * (1f - t);
+		if (remaining <= 0f) return Vector3.Lerp(path[seg], path[seg + 1], Math.Clamp(t + (PathLookAhead / segLen), 0f, 1f));
+		for (var i = seg + 1; i < path.Count - 1; i++)
+		{
+			var len = SegmentLen(path[i], path[i + 1]);
+			if (len < 1e-4f) continue;
+			if (remaining <= len) return Vector3.Lerp(path[i], path[i + 1], Math.Clamp(remaining / len, 0f, 1f));
+			remaining -= len;
+		}
+		return goal;
+	}
+
+	/// <summary>玩家相对当前折线路径的垂直偏离(米)。偏离大说明被撞开或抄近路 → 重规划。</summary>
+	private float DeviationFromPath(System.Numerics.Vector3 myPos)
+	{
+		if (_pathPts == null || _pathPts.Count < 2) return 0f;
+		return NearestOnPath(myPos, _pathPts).dist;
+	}
+
+	/// <summary>折线总长</summary>
+	private static float PathLength(List<System.Numerics.Vector3> path)
+	{
+		float sum = 0;
+		for (var i = 0; i < path.Count - 1; i++) sum += SegmentLen(path[i], path[i + 1]);
+		return sum;
+	}
+
+	private static float SegmentLen(System.Numerics.Vector3 a, System.Numerics.Vector3 b)
+		=> MathF.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Z - a.Z) * (b.Z - a.Z));
+
+	/// <summary>点 p 到折线最近段:返回 (段索引, 段内比例 t, 垂直距离)。</summary>
+	private static (int seg, float t, float dist) NearestOnPath(System.Numerics.Vector3 p, List<System.Numerics.Vector3> path)
+	{
+		int bestSeg = 0; float bestT = 0f; float bestDist = float.MaxValue;
+		for (var i = 0; i < path.Count - 1; i++)
+		{
+			var ax = path[i].X; var az = path[i].Z;
+			var bx = path[i + 1].X; var bz = path[i + 1].Z;
+			var dx = bx - ax; var dz = bz - az;
+			var lenSq = dx * dx + dz * dz;
+			float t;
+			if (lenSq < 1e-6f) t = 0f;
+			else
+			{
+				t = ((p.X - ax) * dx + (p.Z - az) * dz) / lenSq;
+				t = Math.Clamp(t, 0f, 1f);
+			}
+			var px = ax + dx * t; var pz = az + dz * t;
+			var ddx = p.X - px; var ddz = p.Z - pz;
+			var d = MathF.Sqrt(ddx * ddx + ddz * ddz);
+			if (d < bestDist) { bestDist = d; bestSeg = i; bestT = t; }
+		}
+		return (bestSeg, bestT, bestDist);
+	}
 	private void ArriveAtSocialDistance()
 	{
 		_override.Active = false;
@@ -747,6 +752,7 @@ public sealed class MovementController : IDisposable
 		_active = false;
 		_override.Active = false;
 		_override.DesiredPosition = _objectTable.LocalPlayer?.Position ?? default;
+		_pathPts = null; // 清除路径,下次移动重新规划
 		// 移动结束:若本次强切过走路,恢复原状态(玩家手动状态保留)
 		if (_walkForced)
 		{
