@@ -392,27 +392,28 @@ XivChatType 十六进制两位 = 频道号:0A=说话 /s、0E=小队 /p、18=部�
 - **验证过的纯逻辑场景**(D:\navtest\Program.cs 可重跑):日志场景(4.08,5.16)→座位(1.70,3.09)绕桌 X1.3~3.7 Z3.5~4.8 = 先出膨胀→沿右(x≈4.2)→下(z≈2.99)→横进,正确;双桌窄通道/无障碍直连/终点入家具外推/L 形墙/沙发+茶几布局/窄缝/5 桌阵列 全部有解。
 - ⚠️ **待实机验证**:①日志同场景走近 奥·乌儿/去坐,应平滑绕桌不停顿;**把 xllog 寻路段日志发我**;②站定点=座位点(距桌 0.4m 内)时 A* 贴边到达后再 /sit 是否坐正;③lookahead 1.2m 转弯半径是否够(不够把配置化,勿写死)。
 
-# ===== 交接记录 2026-09-06(新会话先读这一段) =====
-整体目标:人设驱动 RP 机器人,能力=读聊天/回话(频道跟随+悄悄话)+ 移动内核(走/坐/绕障)+ LLM 身体演出(rp_body_action 多轮工具)。项目唯一,D:\AuraCanAI.Dalamud,git 仍 0 commit(未做存档,建议新会话先 git init commit + 备份 zip)。
+# ===== 交接记录 2026-09-07(新会话先读这一段) =====
+整体目标:人设驱动 RP 机器人,能力=读聊天/回话(频道跟随+悄悄话)+ 移动内核(走/坐/绕障)+ LLM 身体演出。项目唯一 D:AuraCanAI.Dalamud;**git 已含完整历史(见 git log),改动务必 commit**;_ref/ffxiv_navmesh 为参考克隆(不入库)。
 
-## 已完成且(基本)验证
-- 回复:随来源频道,0D→/t;拟真延迟调度(静默2~5s攒条,MaxWait12s);无人设=不触发AI;台词回显去重;工具泄漏文本=恢复为结构化调用执行(2026-09-06 下午2 起,见上;不再整条丢弃)。
-- LLM:身体演出默认(有人设即启用);工具=rp_body_action(approach/follow/leave/face/stop/sit)+lookup_player+list_seats;多轮/并行 tool_calls 都支持(每 id 回填);场景注入精简。
-- 坐:记录点法——/aca seatadd(坐下记录,房子分组自动带房间) 网页场景设定(房子页签/座位改删/小地图#id/已校准标记);执行 /aca seatgo [名字|#id|空=最近] 或 行为 sit 或 LLM sit;走向记录点(0 距离)+ /sit(SeatSitCommand),坐下后偏差≤0.35 判坐正,歪→起立→朝目标走1m→停0.6s→再坐(共2次);站距迁移到 0。
-- 障碍:网页拖拽画矩形(ObstacleRect,按房子/房间);/aca 无碍命令。**寻路=2026-09-06 下午已重写**:NavPathPlanner(2D 栅格 A*+LOS 拉直,纯逻辑可单测)+ MovementController 前瞻跟随(见上方 2026-09-06(下午)段落),旧 ComputePath/SideArc 已删。纯逻辑场景验证通过,**待实机**。
-- 走路模式=写 Control.IsWalking;卡住判定0.6s;坐流程 0.5s。
+## 已完成并(大部分)实机验证
+- 回复链路:随来源频道(0D→/t);拟真延迟调度(静默2~5s攒条,MaxWait12s);无人设=不触发AI;台词回显去重;**工具调用文本泄漏(XML <invoke>)=解析恢复执行**(不再整条丢弃,2026-09-06 下午2)。
+- 身体演出工具集:**rp_body_action**(approach/follow/leave/face/stop/sit;sit target 支持玩家名=坐 TA 旁最近空座)、**lookup_player**(空 name=列在场玩家含种族/性别/状态/方位;带 name=单查+是否看你)、**list_seats**(near=玩家名,按距离列)、**face_player**(转身看向某人,模型在多人对话时主动调)。
+- 坐椅:seatadd/seatstand/seatgo 全链路;**占用判定半径 0.25m**(一排密座中间位不再误判有人,勿调大)。
+- 寻路:**NavPathPlanner**(2D 栅格 A*+LOS 拉直,纯逻辑可单测)+ MovementController 前瞻圆弧跟随(替代旧 SideArc);纯逻辑测试全过。
+- 采集限制:跨服贝(25/65-6B)/部队(18)/新人(1B)不 LLM 采集(前端禁勾+后端兜底);小队 0E 只采本队成员;1C/1D 动作可回应(跟随最近普通频道),**llm 采集不默认开、按用户勾选**。
 
 ## 待办/未验证(新窗口优先)
-1. **A* 寻路实机验证(2026-09-06 下午重写,新窗口第一优先)**:日志同场景——走近 奥·乌儿/去坐,目标(1.70,3.09)桌左下(桌 X1.3~3.7 Z3.5~4.8);期望沿右通道平滑绕行不停顿。失败把 xllog 寻路段发我。验证点:绕行轨迹弧度、贴桌坐位(0.4m 内)站定后再 /sit、直线无障直走不抖、目标玩家走动时重规划不卡。
-2. 若 A* 仍不稳:再讨论 vnavmesh IPC(笔记有 IPC 接口清单;需装 vnavmesh)。
-3. 椅子边缘细节:多人椅占用、斜家具矩形不支持(轴对齐)。
-4. 存档:git 已有初始 commit(2026-09-06 下午);_ref/ffxiv_navmesh 已重新克隆(不入库,_ref 在 .gitignore)。改动后务必 commit;备份 zip 待验证后再打。
-5. 后续打磨方向(用户提过):人设演出细节(走/坐台词时机、表情配合、座位占用圆场)。
+1. 重载插件后把近期改动实机过一遍(用户会继续测):A* 绕桌、坐人旁、1C/1D 动作回应、lookup 列在场、前端采集勾选是否恢复可点(上轮已修 disabled 误加)。
+2. 椅子边缘细节:多人椅占用、斜家具矩形不支持(轴对齐)。
+3. 后续打磨(用户提过):人设演出细节(走/坐台词时机、表情配合、座位占用圆场)。
+4. 备份 zip 待功能稳定后打((本地备份,已移除) 为旧备份)。
 
 ## 易踩点速记
-- FFXIV 无"坐着"旗标;坐正=位置偏差;站着时位置≈座位点可能误判(必要时改移动锁死探测)。
+- FFXIV 无"坐着"旗标;坐正=位置偏差;站着时位置≈座位点可能误判。
 - /interact 对家具无效→用 /sit(实机确认)。
 - Dalamud 版本 ObjectKind 无 HousingFurniture,屋内家具=HousingEventObject/EventObj。
 - 工具:assistant 带 N 个 tool_calls 必须逐个 tool id 回填否则 400。
-- 模型会把工具调用当台词→LooksLikeToolLeak 拦截。
-- BODYREQ/BODYRSP 在 %AppData%\XIVLauncherCN\dalamud.log。
+- 模型会把工具调用当台词→XML 泄漏恢复已处理;仍兜底 LooksLikeToolLeak。
+- 前端 Web 文件改动需 dotnet build(复制到 bin)+ 插件禁用/启用生效。
+- BODYREQ/BODYRSP/寻路日志在 %AppData%XIVLauncherCNdalamud.log。
+- 占用/判定半径等小常量若实机发现不对,先问用户口径再改,勿自作主张调阈值。
