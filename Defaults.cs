@@ -67,8 +67,8 @@ public static class Defaults
 		new ChannelConfig { channel = "0D", cmd = "/r", channelName = "收悄悄话" },
 		new ChannelConfig { channel = "0E", cmd = "/p", channelName = "小队" },
 		new ChannelConfig { channel = "0F", cmd = "/a", channelName = "团队" },
-		new ChannelConfig { channel = "1C", cmd = "/em", channelName = "原创动作", llm = true }, // 动作有回应(默认开采集;回复跟随最近普通文本频道)
-		new ChannelConfig { channel = "1D", channelName = "情感动作", llm = true }, // 动作有回应(默认开采集;回复跟随最近普通文本频道)
+		new ChannelConfig { channel = "1C", cmd = "/em", channelName = "原创动作" },
+		new ChannelConfig { channel = "1D", channelName = "情感动作" },
 		new ChannelConfig { channel = "1E", cmd = "/y", channelName = "呼喊" },
 		new ChannelConfig { channel = "18", cmd = "/fc", channelName = "部队" },
 		new ChannelConfig { channel = "1B", cmd = "/b", channelName = "新人" },

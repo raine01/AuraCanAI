@@ -286,7 +286,7 @@
 						</div>
 						<div class="col-md-4">
 							<div class="custom-control custom-switch">
-								<input class="custom-control-input" type="checkbox" autocomplete="off" disabled title="此频道不支持大模型采集"
+								<input class="custom-control-input" type="checkbox" autocomplete="off"` + (noLlm ? ' disabled title="此频道不支持大模型采集"' : '') + `
 									id="` + channelId + `_llm"
 									data-channel="` + channel.channel + `"
 									data-type="` + type + `">

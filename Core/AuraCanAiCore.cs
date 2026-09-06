@@ -82,7 +82,6 @@ public class AuraCanAiCore : IDisposable
 	private string _lastTriggerAddr = ""; // 最近触发消息的回复地址(悄悄话 /t 用)
 	private string _lastSpeakChannel = ""; // 最近一次普通文本频道(说话/小队/等,非动作类;1C/1D 触发回复时跟随它)
 	private string _lastSpeakAddr = ""; // 最近普通文本频道对应的回复地址
-	private string _lastSpeakerName = ""; // 最近一次和你说话/对你做动作的人(清洗名;多人时回复对象参考)
 	private string _lastLlmEchoContent = ""; // 最近一次实际发出的 LLM 台词(自身回显去重)
 	private DateTime _lastLlmEchoAt = DateTime.MinValue;
 
@@ -417,7 +416,6 @@ public class AuraCanAiCore : IDisposable
 
 			if (isAction)
 			{
-				_lastSpeakerName = cleanName; // 最近和你互动的人(做了动作/说了话)
 				// 动作类:有可跟随的普通频道 → 进历史并触发回复(回应动作);没有 → 仅进历史作上下文
 				if (_lastSpeakChannel.Length > 0)
 					SendMsg(hist, "user", _lastSpeakChannel, _lastSpeakAddr, true);
@@ -428,7 +426,6 @@ public class AuraCanAiCore : IDisposable
 			{
 				_lastSpeakChannel = channelNo; // 更新最近普通文本频道(只有 llm 采集开启的频道会走到这)
 				_lastSpeakAddr = replyAddress;
-				_lastSpeakerName = cleanName;
 				SendMsg(hist, "user", channelNo, replyAddress, true);
 			}
 		}
@@ -2238,8 +2235,6 @@ public class AuraCanAiCore : IDisposable
 			if (_lastMoveResult != null && (DateTime.Now - _lastMoveResultAt).TotalSeconds <= 25)
 				sb.Append("(刚结束的移动:").Append(_lastMoveResult).Append(")");
 			sb.Append("要确认某人/自己距离用 lookup_player(不带名字=列在场玩家,含种族/性别/在线状态/在你哪边);想坐哪可 list_seats(可传 near=某人看其旁座位);移动/坐下用 rp_body_action(approach/follow/leave/face/sit/stop);对谁说话/回应谁时可用 face_player 转身看向对方(多人时尤其适用);坐某人旁边 = sit 且 target 填那个玩家名(自动找其最近空座)或按 list_seats 的距离挑 #id。距离永远以当前情况为准——对方可能已走开,别以为还在原位。动作绝不写进台词。");
-			if (!string.IsNullOrEmpty(_lastSpeakerName))
-				sb.Insert(0, $"[刚才 {_lastSpeakerName} 和你说话/互动;若在场,这就是你此刻的主要对话对象] ");
 		}
 		catch (Exception e)
 		{
