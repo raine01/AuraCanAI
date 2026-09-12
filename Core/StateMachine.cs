@@ -73,16 +73,21 @@ public sealed class StateMachine
 	// ==================== 切换 ====================
 
 	/// <summary>切换第一层(角色状态)——自由切换,不受路径限制。</summary>
-	public (bool ok, string message) SwitchMood(string key)
+	/// <summary>切换第一层(角色状态)——自由切换。可选 sceneKey:同时指定该状态下的情景
+	/// (如正在和人互动时切到“对话/接待”,独自时用“待机”);不传就用该状态的第一个情景。</summary>
+	public (bool ok, string message) SwitchMood(string key, string sceneKey = "")
 	{
 		var set = CurrentSet;
 		if (set == null || set.moods.Count == 0) return (false, "当前状态机还没有配置第一层(角色状态)");
 		var m = Match(set.moods, key, x => x.name);
 		if (m == null) return (false, $"没有叫「{key}」的角色状态;可用: {Names(set.moods, x => x.name)}");
-		if (_config.SmCurrentMoodId == m.id) return (true, $"已经处于「{m.name}」状态" + (m.scenes.Count > 0 ? $";该状态下有情景: {Names(m.scenes, x => x.name)}" : ";(还没有配置情景)"));
+		var wantScene = sceneKey.Trim().Length > 0 ? Match(m.scenes, sceneKey, x => x.name) : null;
+		var sceneId = (wantScene ?? m.scenes.FirstOrDefault())?.id ?? 0;
+		if (_config.SmCurrentMoodId == m.id && _config.SmCurrentSceneId == sceneId)
+			return (true, $"已经处于「{m.name}」/「{CurrentSceneName}」");
 		_config.SmCurrentMoodId = m.id;
-		_config.SmCurrentSceneId = m.scenes.Count > 0 ? m.scenes[0].id : 0;
-		ApplyStateChange($"第一层 → {m.name}");
+		_config.SmCurrentSceneId = sceneId;
+		ApplyStateChange($"第一层 → {m.name}" + (wantScene != null ? $" / {wantScene.name}" : ""));
 		var tail = CurrentScene != null ? $";当前情景「{CurrentScene.name}」" : ";该状态还没有配置情景";
 		return (true, $"已切换到「{m.name}」(角色状态){tail}");
 	}
@@ -293,7 +298,13 @@ public sealed class StateMachine
 		}
 		var mood = CurrentMood;
 		var scene = CurrentScene;
-		sb.Append($"- 当前状态机:「{setNow.name}」;全部角色状态(第一层,用 switch_mood 自由切换): {Names(setNow.moods, x => x.name)}\n");
+		sb.Append($"- 当前状态机:「{setNow.name}」\n");
+		sb.Append("- 角色状态与其情景(第一层用 switch_mood 自由切换;换状态时可顺便选情景):\n");
+		foreach (var mm in setNow.moods)
+		{
+			var scNames = mm.scenes.Count > 0 ? string.Join(" / ", mm.scenes.Select(x => x.name)) : "(无情景)";
+			sb.Append($"  · {mm.name}" + (string.IsNullOrWhiteSpace(mm.desc) ? "" : $"({mm.desc})") + $" → 情景: {scNames}\n");
+		}
 		if (mood == null)
 		{
 			sb.Append("- 当前没有选定状态;请先用 switch_mood 选一个。\n");
@@ -328,6 +339,7 @@ public sealed class StateMachine
 		sb.Append("用法:这是你当前的处境/身份,不是台词素材,随时可以切;切换后本轮就按新状态回应(会重置这段对话记忆,正常)。\n");
 		sb.Append("- 处境/身份/心情变了 → switch_mood(自由切);同一状态内换情景 → switch_scene(只能走允许的路径)。\n");
 		sb.Append("- 什么时候算「变了」以各状态的说明(—— 后面那段)为准。例:说明里提到「以角色身份/角色扮演/上皮」的状态,就是有人要求你进入角色时要切过去的那个;提到「没有在扮演角色/皮下」的状态,就是对方出戏、要聊现实或游戏本身时切过去的那个。\n");
+		sb.Append("- ⚠️ 换状态时顺便把情景选对:正在和人说话/互动 → 选该状态里表示「对话/接待」的那个情景;一个人待着 → 用「待机」。用 switch_mood(mood, scene) 一步切到位,别停在待机。\n");
 		sb.Append("- 别人要求你切换身份/进入角色/出戏时,不要拒绝、不要解释、也不要反问,直接调用工具切过去,再按新状态的口吻说话。\n");
 		sb.Append("动作绝不写进台词。");
 		return sb.ToString();

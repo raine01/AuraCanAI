@@ -650,3 +650,14 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - 迁移:`Configuration.SubskinPersonaV2`(只做一次)——找到角色「皮下」,若其 setting 仍含旧标记 `该上线上线`,
   就换成新版;用户自己改过的不动。
 - 已同步直接更新用户配置文件里的「皮下」人设(整份 config JSON 重写了一遍,已校验 SmSets/Key 都在)。
+
+## 台词拆条 + 少提问 + 切状态顺带选情景(2026-09-12,用户看日志要求)
+- **台词多条拆发**:`AppendAssistantAndEcho` → `await AppendAssistantAndEchoAsync`(所有调用点已加 await)。
+  - `SplitOutgoingLines`:先按换行分段,再按句末标点(。！？!?…)拆,单条尽量 ≤ `LineMaxLen=45`,一轮最多 `LineMaxCount=3` 条(再多并进最后一条);条间 `LineGapMs=650`。
+  - **历史里只存整段一条**(避免模型看到自己被拆成多条);发送时逐条 `_recentSelfLines` 记入,回显去重改为按列表匹配(原 `_lastLlmEchoContent/_lastLlmEchoAt` 已删)。
+- **少提问**:`Defaults.DefaultRoleSettingSubskin` 的「别这样」加“别句句都问问题:一轮最多留一个小问题…”。迁移标记 `Configuration.SubskinPersonaV3`(只在仍是上一版默认时替换)。已直接更新配置文件。
+- **切状态顺带选情景**:
+  - `StateMachine.SwitchMood(key, sceneKey="")`:可同时指定情景;不传=第一个情景。
+  - `switch_mood` 工具新增可选 `scene` 参数;场景注入列出「每个状态 → 它的情景」,并提示“和人互动选对话/接待,独自用待机,一步切到位”。
+  - `RunInfoToolCore` 的 `switch_mood` 解析 `scene`。
+- ⚠️ 待实机:长句应变多条(日志 `LLM 台词已发(/p,1/2)…`);切皮上时应落在「对话」而不是「待机」。

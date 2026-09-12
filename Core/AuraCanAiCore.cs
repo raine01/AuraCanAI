@@ -84,8 +84,8 @@ public class AuraCanAiCore : IDisposable
 	private string _lastTriggerAddr = ""; // 最近触发消息的回复地址(悄悄话 /t 用)
 	private string _lastSpeakChannel = ""; // 最近一次普通文本频道(说话/小队/等,非动作类;1C/1D 触发回复时跟随它)
 	private string _lastSpeakAddr = ""; // 最近普通文本频道对应的回复地址
-	private string _lastLlmEchoContent = ""; // 最近一次实际发出的 LLM 台词(自身回显去重:否则历史里每条 assistant 会存两遍)
-	private DateTime _lastLlmEchoAt = DateTime.MinValue;
+	// 最近实际发出的自身台词(多条拆分时会有多条;用于自身回显去重:否则历史里每条 assistant 会存两遍)
+	private readonly List<(string Text, DateTime At)> _recentSelfLines = new();
 	// 对方的原创/情感动作(1C/1D):不进聊天历史,只作为「只存在一轮的现场提示」注入下一次请求(用户口径)
 	private readonly List<(string Text, DateTime At)> _pendingActionHints = new();
 	// 一次性系统事件提示(如加入/退出小队):下一轮请求注入一次即清空(与动作提示同 TTL)
@@ -147,6 +147,19 @@ public class AuraCanAiCore : IDisposable
 			if (sub != null && (sub.setting ?? "").Contains("该上线上线"))
 			{
 				sub.setting = Defaults.DefaultRoleSettingSubskin;
+				_config.SetLlmConfig(StripKey(_llmSetting));
+			}
+			try { config.Save(pi); } catch { }
+		}
+		// 迁移:「皮下」人设微调(少提问等);只改上一版默认,不动用户自己改过的
+		if (!_config.SubskinPersonaV3)
+		{
+			_config.SubskinPersonaV3 = true;
+			var sub3 = _llmSetting.roles.FirstOrDefault(r => r.name == "皮下");
+			var s3 = sub3?.setting ?? "";
+			if (sub3 != null && s3.Contains("允许走神") && !s3.Contains("别句句都问"))
+			{
+				sub3.setting = Defaults.DefaultRoleSettingSubskin;
 				_config.SetLlmConfig(StripKey(_llmSetting));
 			}
 			try { config.Save(pi); } catch { }
@@ -435,8 +448,14 @@ public class AuraCanAiCore : IDisposable
 				return;
 			}
 			// 自身回显去重:台词发出后会被聊天事件捕回来,不去重则历史里每条 assistant 都会存两遍
-			// (2026-09-11 实测:BODYREQ 里 assistant 成对重复,模型看到自己在复读)
-			if ((DateTime.Now - _lastLlmEchoAt).TotalSeconds <= 25 && text == _lastLlmEchoContent)
+			// (2026-09-11 实测:BODYREQ 里 assistant 成对重复,模型看到自己在复读);多条拆发时逐条匹配
+			bool recent;
+			lock (_historyLock)
+			{
+				_recentSelfLines.RemoveAll(x => (DateTime.Now - x.At).TotalSeconds > 25);
+				recent = _recentSelfLines.Any(x => x.Text == text);
+			}
+			if (recent)
 			{
 				Log($"LLM 自身回显已跳过(历史去重): {text}");
 				return;
@@ -1974,7 +1993,7 @@ public class AuraCanAiCore : IDisposable
 		var rspMsg = JObject.Parse(rspMsgString)["choices"]?[0]?["message"]?.ToObject<Message>();
 		var content = rspMsg?.content;
 		if (!string.IsNullOrEmpty(content))
-			AppendAssistantAndEcho(content, channelNo, replyAddress);
+			await AppendAssistantAndEchoAsync(content, channelNo, replyAddress);
 	}
 
 	/// <summary>历史快照副本;若本次攒了多条(manyMsgs),在最后一条消息前插提示(让模型综合回应、不逐条机械回复)。</summary>
@@ -2010,7 +2029,7 @@ public class AuraCanAiCore : IDisposable
 			{
 				// 自由回复轮:若模型给出的是英文(非中文人设要求)则带提示重试一次,仍不合格则丢弃
 				content = await EnsureChineseTextAsync(msgs, role, content);
-				if (!string.IsNullOrEmpty(content)) AppendAssistantAndEcho(content, channelNo, replyAddress);
+				if (!string.IsNullOrEmpty(content)) await AppendAssistantAndEchoAsync(content, channelNo, replyAddress);
 				return;
 			}
 			var actionCall = calls.FirstOrDefault(c => c.name == "rp_body_action");
@@ -2024,7 +2043,7 @@ public class AuraCanAiCore : IDisposable
 				try { var a = JObject.Parse(actionCall.args ?? "{}"); action = (a["action"]?.ToString() ?? "").Trim().ToLowerInvariant(); target = (a["target"]?.ToString() ?? "").Trim(); side = (a["side"]?.ToString() ?? "").Trim(); } catch { }
 				if (string.IsNullOrEmpty(action))
 				{
-					if (!string.IsNullOrEmpty(content)) AppendAssistantAndEcho(content, channelNo, replyAddress);
+					if (!string.IsNullOrEmpty(content)) await AppendAssistantAndEchoAsync(content, channelNo, replyAddress);
 					return;
 				}
 				var actedDesc = ExecuteBodyAction(action, target, side);
@@ -2053,7 +2072,7 @@ public class AuraCanAiCore : IDisposable
 						c2 = c3;
 					}
 					c2 = await EnsureChineseTextAsync(msgs2, role, c2);
-					if (!string.IsNullOrEmpty(c2)) AppendAssistantAndEcho(c2, channelNo, replyAddress);
+					if (!string.IsNullOrEmpty(c2)) await AppendAssistantAndEchoAsync(c2, channelNo, replyAddress);
 				}
 				return;
 			}
@@ -2270,9 +2289,9 @@ public class AuraCanAiCore : IDisposable
 				}
 				case "switch_mood":
 				{
-					var moodName = "";
-					try { moodName = (JObject.Parse(argsJson)["mood"]?.ToString() ?? "").Trim(); } catch { }
-					return State.SwitchMood(moodName).message;
+					var moodName = ""; var moodScene = "";
+					try { var a = JObject.Parse(argsJson); moodName = (a["mood"]?.ToString() ?? "").Trim(); moodScene = (a["scene"]?.ToString() ?? "").Trim(); } catch { }
+					return State.SwitchMood(moodName, moodScene).message;
 				}
 				case "switch_scene":
 				{
@@ -2461,8 +2480,12 @@ public class AuraCanAiCore : IDisposable
 			if (moods.Count > 0)
 			{
 				tools.Add(Func("switch_mood",
-					"切换你的角色状态/身份(状态机第一层)。处境/身份/心情变了就用它(如对方要你角色扮演/上皮，或要你出戏/皮下，情绪变化…);以各状态说明为准,别人要求时不要拒绝直接切。可用状态: " + string.Join(" / ", moods.Select(m => m.name)),
-					new JObject { ["mood"] = new JObject { ["type"] = "string", ["enum"] = new JArray(moods.Select(m => JToken.FromObject(m.name)).ToArray()) } }, new[] { "mood" }));
+					"切换你的角色状态/身份(状态机第一层)。处境/身份/心情变了就用它(如对方要你角色扮演/上皮，或要你出戏/皮下，情绪变化…);以各状态说明为准,别人要求时不要拒绝直接切。可选 scene:同时指定该状态下用哪个情景(正在和人互动选「对话/接待」,独自待着选「待机」),一步切到位。可用状态: " + string.Join(" / ", moods.Select(m => m.name)),
+					new JObject
+					{
+						["mood"] = new JObject { ["type"] = "string", ["enum"] = new JArray(moods.Select(m => JToken.FromObject(m.name)).ToArray()) },
+						["scene"] = new JObject { ["type"] = "string", ["description"] = "可选:该状态下的情景名(如 对话/接待/待机)。正在和人互动就填对话/接待,独自待着填待机;不填=第一个情景。" },
+					}, new[] { "mood" }));
 			}
 			var allowed = State.AllowedScenes();
 			if (State.CurrentMood != null && allowed.Count > 0)
@@ -2640,33 +2663,71 @@ public class AuraCanAiCore : IDisposable
 	/// <summary>发送助手台词:回复跟随触发消息的来源频道(channelNo),无任何 /s 兜底;
 	/// 悄悄话 0D 用 /t 回复对方(replyAddress=名字@服务器);频道无对应命令/缺回复地址时丢弃该台词(不入历史)。
 	/// 历史与网页同步。</summary>
-	private void AppendAssistantAndEcho(string content, string channelNo = "", string replyAddress = "")
+	// ===== 多条拆发(2026-09-12 用户口径:话太长可以切成多条发) =====
+	private const int LineMaxLen = 45;   // 单条尽量不超过这么多字(超出按句末标点再拆)
+	private const int LineMaxCount = 3;  // 一轮最多拆成几条(再多就并进最后一条)
+	private const int LineGapMs = 650;   // 多条之间的发送间隔(毫秒)
+
+	/// <summary>把一段台词按换行/句末标点拆成多条(尽量每条 ≤ LineMaxLen,最多 LineMaxCount 条)。</summary>
+	private static List<string> SplitOutgoingLines(string text)
 	{
-		var clean = System.Text.RegularExpressions.Regex.Replace(content, "[\u0000-\u001F]", "").Replace("\"", "");
-		if (clean.Length == 0) return;
+		var t = (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Trim();
+		if (t.Length == 0) return new List<string>();
+		var paras = t.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+		var lines = new List<string>();
+		foreach (var p in paras)
+		{
+			if (p.Length <= LineMaxLen) { lines.Add(p); continue; }
+			var sb = new System.Text.StringBuilder();
+			foreach (var ch in p)
+			{
+				sb.Append(ch);
+				if ("。！？!?…".IndexOf(ch) >= 0 && sb.Length >= LineMaxLen * 0.6)
+				{
+					lines.Add(sb.ToString().Trim());
+					sb.Clear();
+				}
+			}
+			if (sb.Length > 0) lines.Add(sb.ToString().Trim());
+		}
+		lines.RemoveAll(s => s.Length == 0);
+		if (lines.Count > LineMaxCount)
+		{
+			var keep = lines.Take(LineMaxCount - 1).ToList();
+			keep.Add(string.Concat(lines.Skip(LineMaxCount - 1)));
+			lines = keep;
+		}
+		return lines;
+	}
+
+	/// <summary>发送 LLM 台词:按换行/句末标点拆成多条依次发出(像真人一句句打出来);历史里只存整段一条。
+	/// 频道路由:只回对应频道,不用 /s 兜底;悄悄话回 /t。</summary>
+	private async Task AppendAssistantAndEchoAsync(string content, string channelNo = "", string replyAddress = "")
+	{
+		var crude = (content ?? "").Replace("\"", "");
+		if (crude.Trim().Length == 0) return;
 
 		// 0) 去掉括号/星号里的动作·神态描写(模型偶发在台词里写「(轻轻点头)」「*叹气*」这类描写;
 		//    角色真正要做的动作应该走 rp_emote 工具,台词必须干净。整句都是描写 → 不发)
-		var raw = clean;
-		clean = StripBracketActions(clean);
-		if (clean.Length == 0)
+		var stripped = StripBracketActions(crude);
+		if (stripped.Trim().Length == 0)
 		{
-			Log($"LLM 台词被过滤:整句都是括号/星号描写,不发送 | 原文 {raw}");
+			Log($"LLM 台词被过滤:整句都是括号/星号描写,不发送 | 原文 {TruncateLog(crude, 80)}");
 			return;
 		}
-		if (clean != raw)
-			Log($"LLM 台词已去除括号描写: 「{clean}」 | 原文 「{raw}」");
+		if (stripped != crude)
+			Log($"LLM 台词已去除括号描写: 「{TruncateLog(stripped, 80)}」 | 原文 「{TruncateLog(crude, 80)}」");
 
 		// 0.1) 安全过滤:模型把工具调用当文本输出时(如 <tool_calls><invoke rp_body_action>…),丢弃不发送
-		if (LooksLikeToolLeak(clean))
+		if (LooksLikeToolLeak(stripped))
 		{
-			Log($"LLM 回复丢弃:疑似工具调用文本泄漏,不发送 | {clean.Substring(0, Math.Min(clean.Length, 80))}");
+			Log($"LLM 回复丢弃:疑似工具调用文本泄漏,不发送 | {TruncateLog(stripped, 80)}");
 			return;
 		}
 
-		// 1) 频道路由:只回对应频道,不用 /s 兜底;悄悄话回 /t
+		// 1) 频道路由(多条共用):只回对应频道,不用 /s 兜底;悄悄话回 /t
 		string cmd;
-		string payload;
+		var isTell = false;
 		if (channelNo == "0D")
 		{
 			if (string.IsNullOrEmpty(replyAddress))
@@ -2675,7 +2736,7 @@ public class AuraCanAiCore : IDisposable
 				return;
 			}
 			cmd = "/t";
-			payload = $"{replyAddress} {clean}";
+			isTell = true;
 		}
 		else
 		{
@@ -2685,18 +2746,24 @@ public class AuraCanAiCore : IDisposable
 				Log($"LLM 回复丢弃:频道 {channelNo} 无对应回复命令(不兜底),台词不入历史");
 				return;
 			}
-			payload = clean;
 		}
 
-		// 2) 发送(回复节奏已由调度器控制,此处不再二次节流)
+		// 2) 拆条 → 依次发送(条间留间隔);历史里只存整段一条(不让模型看到自己被拆成多条)
+		var lines = SplitOutgoingLines(stripped)
+			.Select(l => System.Text.RegularExpressions.Regex.Replace(l, "[\u0000-\u001F]", ""))
+			.Where(l => l.Length > 0).ToList();
+		if (lines.Count == 0) return;
+		lock (_historyLock) _chatHistory.Add(new Message { content = string.Join("\n", lines), role = "assistant" });
 
-		lock (_historyLock) _chatHistory.Add(new Message { content = clean, role = "assistant" });
-		var ok = RunCommand(cmd, payload);
-		Log($"LLM 台词已发({cmd}): {(ok ? "成功" : "失败(未登录等)")} | {clean}");
-		if (ok)
+		for (var i = 0; i < lines.Count; i++)
 		{
-			_lastLlmEchoContent = clean; // 供自身回显去重(否则聊天事件回显会把同一条台词再写进历史一次)
-			_lastLlmEchoAt = DateTime.Now;
+			var line = lines[i];
+			var payload = isTell ? $"{replyAddress} {line}" : line;
+			var ok = RunCommand(cmd, payload);
+			Log($"LLM 台词已发({cmd},{i + 1}/{lines.Count}): {(ok ? "成功" : "失败(未登录等)")} | {line}");
+			if (ok)
+				lock (_historyLock) _recentSelfLines.Add((line, DateTime.Now));
+			if (i < lines.Count - 1) await Task.Delay(LineGapMs);
 		}
 	}
 
