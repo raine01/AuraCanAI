@@ -62,6 +62,22 @@ public sealed class StateMachine
 		return (true, $"已切换到「{s.name}」(人设: {role})");
 	}
 
+	/// <summary>手动强制设置为当前状态(不检查通路;调试/逃生用,如 /aca smstate 皮下)。
+	/// 因为「被当成AI」这类状态没有出口,只能从命令/网页切回去。</summary>
+	public (bool ok, string message) ForceSetState(string key)
+	{
+		var set = CurrentSet;
+		if (set == null || set.states.Count == 0) return (false, "当前状态机还没有配置状态");
+		var s = Match(set.states, key, x => x.name);
+		if (s == null) return (false, $"没有叫「{key}」的状态;可用: {Names(set.states, x => x.name)}");
+		_config.SmCurrentStateId = s.id;
+		var role = string.IsNullOrEmpty(s.roleName) ? "(未设置人设)" : s.roleName;
+		_core.SaveConfig();
+		_core.ResetChatHistoryPublic();
+		Plugin.Log?.Information($"[状态机] 手动设置状态 → {s.name}(人设: {role})");
+		return (true, $"已(手动)切到「{s.name}」(人设: {role})");
+	}
+
 	// ==================== 给 AI 的状态说明(注入 system) ====================
 
 	/// <summary>状态机说明文本(未开启返回空串;供 BuildSceneSnippet 注入)。</summary>

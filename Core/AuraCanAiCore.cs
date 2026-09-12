@@ -177,6 +177,31 @@ public class AuraCanAiCore : IDisposable
 			}
 			try { config.Save(pi); } catch { }
 		}
+		// 迁移:补「皮下AI」人设 + 默认套里的「被当成AI」状态(皮下 → 被当成AI 单向,切不出去)
+		if (!_config.AiStateAdded)
+		{
+			_config.AiStateAdded = true;
+			if (_llmSetting.roles.All(r => r.name != "皮下AI"))
+				_llmSetting.roles.Add(new Role { name = "皮下AI", setting = Defaults.DefaultRoleSettingSubskinAi, frequencyPenalty = 0.7, presencePenalty = 1 });
+			_config.SetLlmConfig(StripKey(_llmSetting));
+			foreach (var set in _config.SmSets)
+			{
+				var subState = set.states.FirstOrDefault(x => x.name == "皮下");
+				if (subState == null || set.states.Any(x => x.name == "被当成AI")) continue;
+				var newId = (set.states.Count == 0 ? 0 : set.states.Max(x => x.id)) + 1;
+				set.states.Add(new SmState
+				{
+					id = newId,
+					name = "被当成AI",
+					desc = "对方已经认定你是 AI、再否认也没意思的时候(顺着演,像个在冒充 AI 的人)",
+					roleName = "皮下AI",
+					nextStateIds = new List<int>(), // 单向入口:切不出去
+					tools = AiToolCatalog.AllNames(),
+				});
+				if (!subState.nextStateIds.Contains(newId)) subState.nextStateIds.Add(newId);
+			}
+			try { config.Save(pi); } catch { }
+		}
 
 		Tts = new TtsService(config.TtsWorkers) { Enabled = config.TtsEnabled, Volume = config.TtsVolume, Rate = config.TtsRate };
 		State = new StateMachine(this, config); // 状态机(在 BehaviorEngine/ResetChatHistory 之前建,IsRolePlaying 依赖它)

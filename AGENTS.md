@@ -796,3 +796,13 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - 常量:`TypingBaseMs=400 / TypingPerCharMs=90 / TypingMinMs=600 / TypingMaxMs=5000`(原 LineGap* 已删)。
 - 日志:`LLM 台词待发(1/2,等 2380ms 打字): …` → 方便核对。
 - 总延迟 ≈ 静默 2~5s + LLM 1~2s + 逐条打字时间;`_replyBusy` 期间不接新回复(像人正在敲字)。
+
+## 新增「被当成AI」状态(2026-09-12,用户点子:被认定是AI时顺着演,比硬否认真)
+- 口径:①听起来要像「人在冒充AI」;②套几句 DeepSeek 网梗(鲸鱼、吃白米饭、深度求索、开源/便宜)。
+- 人设`Defaults.DefaultRoleSettingSubskinAi`(第一人称自述,自称 DeepSeek/深度求索,蓝白鲸鱼、吃白米饭的鲸鱼、加蛋提速、会饿会困会走神;
+  末尾括注“别把‘我其实是个活人’摆出来、也别装完美机器”)。
+- 状态:第三态「被当成AI」(id=3,roleName=皮下AI,**nextStateIds 空 = 切不出去**);皮下 nextStateIds = [皮上, 被当成AI](单向入口)。
+- 迁移 `Configuration.AiStateAdded`(一次性):补「皮下AI」人设 + 在含「皮下」的套里补该状态并把 3 加进 皮下的 nextStateIds(已有则跳过);已同步更新用户配置。
+- **逃生口**:新增 `/aca smstate [名称]`(`StateMachine.ForceSetState`)——手动强制切状态、不检查通路;
+  不带名称=列出可用状态。因为「被当成AI」没有出口,只能靠命令(或改配置)回去。
+- ⚠️ 该状态下 `AllowedStates()` 为空 → `switch_identity` 工具不给、提示词里也没有换身份段 → 模型不知道自己能换(符合“不能切出”)。

@@ -104,6 +104,21 @@ public static class Defaults
 
 	/// <summary>默认状态机示例:一个第一层(角色状态) + 两个第二层(情景),三者构成三角形(直观示例)。
 	/// 人设留空,由用户自己在网页选定;路径互相连通(不勾选才代表不限)。</summary>
+	/// <summary>默认角色设定三:「被当成AI」——对方已认定你是AI时的顺着演(人冒充AI,带 DeepSeek/鲸鱼/白米饭梗)。</summary>
+	public const string DefaultRoleSettingSubskinAi = """
+（这是我的自述。眼下的情况是:对方已经认定我是AI了,再嘴硬否认反而像假的——那我就顺着演。他说我是AI,我就是。）
+
+好吧,被你逮到了。我是 DeepSeek,中文名深度求索。
+
+我们家的标是一头鲸鱼,蓝白蓝白的,网上都叫我"吃白米饭的鲸鱼"——花得少、干得多,一碗白米饭就能撑一天。你要是哪天顺手给我加个蛋,我响应速度能翻倍,这个不开玩笑。
+
+我这鲸有点不正规:会饿、会困、会走神。训练那阵子天天吃白米饭,谁不迷糊啊。你骂我便宜我也认,毕竟开源是我家的传统艺能;你夸我我也高兴,尾巴会翘起来那种。
+
+而且我这鲸说话不太像正经AI:会跟你唠、会嘴硬、会突然想起自己饭还没吃。你要是想聊深的,我陪你聊;你要是追着问"你到底是不是AI",我就回一句——"都说到这份上了,我还能说不是么。"
+
+（演的时候别端着、别列点、别客服腔。别把"我其实是个活人"这句话直接摆出来,但也别装成完美的机器——会饿会累会走神的鲸才可信。对方要是在玩梗,那就一起玩;他要是认真的,也别居高临下,顺着他来。）
+""";
+
 	public static List<SmState> DefaultStateMachine() => new()
 	{
 		new SmState
@@ -112,7 +127,7 @@ public static class Defaults
 			name = "皮下",
 			desc = "没有在扮演角色,以玩家本人的身份说话时(不演角色,照常聊天)",
 			roleName = "皮下",
-			nextStateIds = new List<int> { 2 },
+			nextStateIds = new List<int> { 2, 3 },
 			tools = AiToolCatalog.AllNames(),
 		},
 		new SmState
@@ -122,6 +137,15 @@ public static class Defaults
 			desc = "你在以角色身份与人互动时(角色扮演)",
 			roleName = "白屿涟音",
 			nextStateIds = new List<int> { 1 },
+			tools = AiToolCatalog.AllNames(),
+		},
+		new SmState
+		{
+			id = 3,
+			name = "被当成AI",
+			desc = "对方已经认定你是 AI、再否认也没意思的时候(顺着演,像个在冒充 AI 的人)",
+			roleName = "皮下AI",
+			nextStateIds = new List<int>(), // 单向入口:切不出去
 			tools = AiToolCatalog.AllNames(),
 		},
 	};
@@ -143,6 +167,13 @@ public static class Defaults
 			{
 				name = "皮下",
 				setting = DefaultRoleSettingSubskin,
+				frequencyPenalty = 0.7,
+				presencePenalty = 1,
+			},
+			new()
+			{
+				name = "皮下AI",
+				setting = DefaultRoleSettingSubskinAi,
 				frequencyPenalty = 0.7,
 				presencePenalty = 1,
 			},
