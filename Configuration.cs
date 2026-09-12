@@ -51,7 +51,9 @@ public class Configuration : IPluginConfiguration
 	public bool StateMachineEnabled { get; set; } = false;
 	public int SmCurrentMoodId { get; set; } // 当前第一层(角色状态)
 	public int SmCurrentSceneId { get; set; } // 当前第二层(情景)
-	public List<SmMood> SmMoods { get; set; } = new(); // 第一层列表(含各自的情景)
+	public List<SmMood> SmMoods { get; set; } = new(); // [旧]单状态机的第一层列表(启动时迁移进 SmSets,新代码不再用)
+	public List<SmSet> SmSets { get; set; } = new(); // 状态机列表(可多套)
+	public int SmCurrentSetId { get; set; } // 当前状态机(前端页签;也是运行时用的那套)
 	public bool DefaultRolesV2Added { get; set; } // 迁移标记:已把默认「皮下」人设并入现有角色列表(只做一次)
 
 	// 以下两个字段对应原 Triggernometry 持久化变量 "AuraCanAI" / "AuraCanAI_LLM"

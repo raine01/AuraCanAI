@@ -82,6 +82,14 @@ public class RoleAction
 
 // ==================== 状态机(两层:第一层角色状态 / 第二层情景) ====================
 
+/// <summary>状态机(可以有多套;前端以页签切换,像场景设定的「房子」)。每套内含自己的第一层/第二层。</summary>
+public class SmSet
+{
+	public int id { get; set; }
+	public string name { get; set; } = ""; // 显示名(如 默认 / 白屿涟音 / 战斗)
+	public List<SmMood> moods { get; set; } = new(); // 该套的第一层列表
+}
+
 /// <summary>状态机第一层:角色状态/心情(如 心情很糟糕 / 非常开心 / 亢奋 / 受伤中)。
 /// 不同第一层对应不同的第二层情景,角色只能在当前第一层下的几个情景之间切换。第一层由 AI 自由判断切换。</summary>
 public class SmMood

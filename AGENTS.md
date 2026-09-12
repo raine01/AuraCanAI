@@ -579,3 +579,13 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - 位置/数据变化的回显改为 **轮询静默重载**:`pollStateMachineCurrent` 里比较 `JSON.stringify(r.moods)` 与本地,不同且 `!smEditing && !smSaveTimer` 时整体重载并重渲编辑器(游戏内 `/aca pos` 后 2 秒内自动显示)。
 - `smSave` 的 doSave 里把 `smSaveTimer = null`(供上面的“无待保存”判断)。
 - 后端 `SwitchStateMachineJson` 接口保留(UI 不再调用,留给调试)。
+
+## 多套状态机(2026-09-12,用户要求,UI 参考「场景设定」的房子页签)
+- 新模型 `SmSet { id, name, moods }`;`Configuration.SmSets` + `SmCurrentSetId`。
+  - 旧字段 `Configuration.SmMoods` 保留为**迁移用**(启动时 `EnsureStateMachineState()` 把旧单状态机收进 `SmSets` 一套「状态机1」后清空,新代码不再读写它)。
+  - `EnsureStateMachineState()`(构造早期调用,早于 `StateMachine` 构造):迁移旧单套 → 无套则种默认示例 → 唯一且旧默认(平常)则换新默认 → 校准 currentSet/currentMood/currentScene。变动落盘。
+- `StateMachine`:新增 `CurrentSet`;`CurrentMood/CurrentScene`/`SwitchMood/SwitchScene`/`AllowedScenes`/`RecordPosition`/`ClearPosition`/`DescribeStateForAi` 全部改为在当前 Set 内查。
+  - `ArmPos(setId, moodId, sceneId, name)`(多了 setId);`ArmedSetId`。
+- HTTP:`GetStateMachine` 返回 `sets/currentSetId/...`;`SaveStateMachine` body = `{enabled,currentSetId,sets[]}`(对每套做与以前同样的清洗:无名剔除、id 去重、nextSceneIds 过滤);新增 `SetCurrentStateMachine {id}`(切当前套并重置 idle+上下文)。`ArmIdlePos`/`ClearIdlePos` 都要带 `setId`。
+- 前端:新增顶部**状态机页签** `#smSetBar`(按钮 + ✎重命名 + ✕删除 + 新建,样式同场景设定房子页签);点页签 = 选中并切为当前套(`/SetCurrentStateMachine`)。节点图/编辑面板都基于 `smActiveSet()`。保存带 `currentSetId: smSelSet`。删除时至少保留一套。
+- 运行时只使用「当前套」;跨套切换目前**只能手动点页签**(AI 工具不涉及跨套)。

@@ -53,6 +53,7 @@
 								<button type="button" class="btn btn-sm btn-success" id="smSaveBtn">保存</button>
 								<span class="small ml-2" id="smStatus"></span>
 							</div>
+							<div id="smSetBar" class="mb-2"></div>
 							<svg id="smGraph" class="w-100 border rounded mb-2" style="height:260px;background:#f8f9fa;"></svg>
 							<div class="d-flex align-items-center mb-2">
 								<button type="button" class="btn btn-sm btn-outline-success mr-2" id="smAddMoodBtn">+ 状态</button>
@@ -557,9 +558,9 @@
 			});
 		}
 
-		// ===== 状态机(两层:第一层角色状态 / 第二层情景) =====
-		let sm = { enabled: false, currentMoodId: 0, currentSceneId: 0, moods: [], roles: [], armed: null, currentRole: '' };
-		let smSelMood = 0, smSelScene = 0, smSelKind = 'mood';
+		// ===== 状态机(多套;每套两层:第一层角色状态 / 第二层情景) =====
+		let sm = { enabled: false, currentSetId: 0, currentMoodId: 0, currentSceneId: 0, sets: [], roles: [], armed: null, currentRole: '' };
+		let smSelSet = 0, smSelMood = 0, smSelScene = 0, smSelKind = 'mood';
 		let smEditing = false, smEditTimer = null, smSaveTimer = null;
 
 		function smMarkEditing() {
@@ -567,7 +568,8 @@
 			clearTimeout(smEditTimer);
 			smEditTimer = setTimeout(function() { smEditing = false; }, 1200);
 		}
-		function smMood(id) { return (sm.moods || []).find(function(m) { return m.id === id; }) || null; }
+		function smActiveSet() { return (sm.sets || []).find(function(s) { return s.id === smSelSet; }) || null; }
+		function smMood(id) { var set = smActiveSet(); return set ? (set.moods || []).find(function(m) { return m.id === id; }) || null : null; }
 		function smScene(mid, sid) { var m = smMood(mid); return m ? (m.scenes || []).find(function(s) { return s.id === sid; }) || null : null; }
 		function smNextId(list) { var max = 0; (list || []).forEach(function(x) { max = Math.max(max, x.id || 0); }); return max + 1; }
 		function smRoleOpts(selected) {
@@ -582,29 +584,32 @@
 			$.ajax({
 				url: '/GetStateMachine', type: 'POST',
 				success: function(r) {
-					sm = r || {}; sm.moods = sm.moods || []; sm.roles = sm.roles || [];
-					if (!smMood(smSelMood)) { smSelMood = sm.currentMoodId || (sm.moods[0] ? sm.moods[0].id : 0); smSelKind = 'mood'; smSelScene = 0; }
+					sm = r || {}; sm.sets = sm.sets || []; sm.roles = sm.roles || [];
+					if (!sm.sets.some(function(s) { return s.id === smSelSet; }))
+						smSelSet = sm.currentSetId || (sm.sets[0] ? sm.sets[0].id : 0);
+					var set = smActiveSet();
+					if (!smMood(smSelMood)) { smSelKind = 'mood'; smSelMood = set && set.moods[0] ? set.moods[0].id : 0; smSelScene = 0; }
 					smRender();
 				},
 				error: function(x, s, e) { console.error('加载状态机失败:', e); }
 			});
 		}
 
-		// 轮询只更新徽章与图上的当前状态高亮(不碰正在编辑的表单)
+		// 轮询:更新徽章/高亮;数据在别处变化(游戏内记录位置等)且未在编辑时静默整体重载
 		function pollStateMachineCurrent() {
 			$.ajax({
 				url: '/GetStateMachine', type: 'POST',
 				success: function(r) {
-					// 别处(游戏内记录位置等)改了数据 → 未在编辑且无待保存改动时静默重载整个列表
-					if (JSON.stringify(r.moods || []) !== JSON.stringify(sm.moods || []) && !smEditing && !smSaveTimer) {
-						sm.moods = r.moods || []; sm.roles = r.roles || [];
-						sm.enabled = r.enabled; sm.currentMoodId = r.currentMoodId; sm.currentSceneId = r.currentSceneId;
+					if (JSON.stringify(r.sets || []) !== JSON.stringify(sm.sets || []) && !smEditing && !smSaveTimer) {
+						sm.sets = r.sets || []; sm.roles = r.roles || [];
+						sm.enabled = r.enabled; sm.currentSetId = r.currentSetId; sm.currentMoodId = r.currentMoodId; sm.currentSceneId = r.currentSceneId;
 						sm.currentRole = r.currentRole; sm.armed = r.armed;
+						if (!sm.sets.some(function(s) { return s.id === smSelSet; })) smSelSet = sm.currentSetId || (sm.sets[0] ? sm.sets[0].id : 0);
 						$('#smEnabled').prop('checked', !!r.enabled);
-						smRenderCurrent(); smDrawGraph(); smRenderEditor();
+						smRender();
 						return;
 					}
-					sm.enabled = r.enabled; sm.currentMoodId = r.currentMoodId; sm.currentSceneId = r.currentSceneId;
+					sm.enabled = r.enabled; sm.currentSetId = r.currentSetId; sm.currentMoodId = r.currentMoodId; sm.currentSceneId = r.currentSceneId;
 					sm.currentRole = r.currentRole; sm.armed = r.armed;
 					$('#smEnabled').prop('checked', !!r.enabled);
 					smRenderCurrent();
@@ -617,12 +622,14 @@
 		function smRender() {
 			$('#smEnabled').prop('checked', !!sm.enabled);
 			smRenderCurrent();
+			smRenderSetBar();
 			smDrawGraph();
 			smRenderEditor();
 		}
 
 		function smRenderCurrent() {
-			var m = smMood(sm.currentMoodId);
+			var set = (sm.sets || []).find(function(s) { return s.id === sm.currentSetId; });
+			var m = set ? (set.moods || []).find(function(x) { return x.id === sm.currentMoodId; }) : null;
 			var s = m ? (m.scenes || []).find(function(x) { return x.id === sm.currentSceneId; }) : null;
 			if (!sm.enabled) {
 				$('#smCurrentBadge').removeClass('badge-primary').addClass('badge-secondary').text('未启用');
@@ -630,15 +637,79 @@
 			}
 			var role = sm.currentRole ? (' · ' + sm.currentRole) : ' · 无人设';
 			$('#smCurrentBadge').removeClass('badge-secondary').addClass('badge-primary')
-				.text((m ? m.name : '未选状态') + ' / ' + (s ? s.name : '未选情景') + role);
+				.text((set ? set.name : '?') + ' / ' + (m ? m.name : '?') + ' / ' + (s ? s.name : '?') + role);
 		}
 
-		// 节点图:第一层(角色状态)在上、其第二层(情景)在下,路径用虚弧线连接(默认示例为三角形)
+		// 状态机页签(像场景设定的房子页签)
+		function smRenderSetBar() {
+			var bar = $('#smSetBar').empty();
+			bar.append('<span class="text-muted small mr-2">状态机：</span>');
+			(sm.sets || []).forEach(function(s) {
+				var g = $('<div class="btn-group mr-2 mb-1"></div>');
+				var b = $('<button type="button" class="btn btn-sm"></button>')
+					.addClass(s.id === smSelSet ? 'btn-primary' : 'btn-outline-primary').text(s.name || '(未命名)')
+					.on('click', function() { smSwitchSet(s.id); });
+				var ren = $('<button type="button" class="btn btn-sm btn-outline-secondary" title="重命名">✎</button>').on('click', function(ev) { ev.stopPropagation(); smRenameSet(s); });
+				var del = $('<button type="button" class="btn btn-sm btn-outline-danger" title="删除">✕</button>').on('click', function(ev) { ev.stopPropagation(); smDeleteSet(s); });
+				bar.append(g.append(b).append(ren).append(del));
+			});
+			bar.append($('<button type="button" class="btn btn-sm btn-outline-success mb-1">+ 新状态机</button>').on('click', smAddSet));
+		}
+
+		function smSwitchSet(id) {
+			if (smSelSet === id) return;
+			smSelSet = id;
+			var set = smActiveSet();
+			smSelKind = 'mood'; smSelMood = set && set.moods[0] ? set.moods[0].id : 0; smSelScene = 0;
+			smRenderSetBar(); smDrawGraph(); smRenderEditor();
+			$.ajax({
+				url: '/SetCurrentStateMachine', type: 'POST', contentType: 'application/json', data: JSON.stringify({ id: id }),
+				success: function(r) {
+					if (!r || r.result !== 'success') return;
+					sm.currentSetId = r.currentSetId; sm.currentMoodId = r.currentMoodId; sm.currentSceneId = r.currentSceneId; sm.currentRole = r.currentRole;
+					smRenderCurrent(); smDrawGraph();
+				}
+			});
+		}
+
+		function smAddSet() {
+			var name = prompt('新状态机名字（如：默认 / 白屿涟音 / 战斗）：');
+			if (!name || !name.trim()) return;
+			var id = smNextId(sm.sets);
+			sm.sets.push({ id: id, name: name.trim(), moods: [] });
+			smSelSet = id; smSelKind = 'mood'; smSelMood = 0; smSelScene = 0;
+			smRender(); smSave(true);
+			$.ajax({ url: '/SetCurrentStateMachine', type: 'POST', contentType: 'application/json', data: JSON.stringify({ id: id }) });
+		}
+
+		function smRenameSet(s) {
+			var n = prompt('重命名状态机:', s.name);
+			if (n === null) return;
+			s.name = n.trim() || s.name;
+			smRenderSetBar(); smSave();
+		}
+
+		function smDeleteSet(s) {
+			if ((sm.sets || []).length <= 1) { showAlert('至少要保留一个状态机', 'warning'); return; }
+			if (!confirm('删除状态机「' + s.name + '」及其全部状态/情景/动作？')) return;
+			var wasCurrent = sm.currentSetId === s.id;
+			sm.sets = sm.sets.filter(function(x) { return x.id !== s.id; });
+			if (smSelSet === s.id) {
+				smSelSet = sm.sets[0].id;
+				smSelKind = 'mood'; smSelMood = sm.sets[0].moods[0] ? sm.sets[0].moods[0].id : 0; smSelScene = 0;
+			}
+			smRender(); smSave(true);
+			if (wasCurrent)
+				$.ajax({ url: '/SetCurrentStateMachine', type: 'POST', contentType: 'application/json', data: JSON.stringify({ id: smSelSet }) });
+		}
+
+		// 节点图:上半=第一层(状态),下半=第二层(情景);中间虚线分隔;第一层之间虚线(可自由切)、情景间虚线=路径
 		function smDrawGraph() {
 			var svg = document.getElementById('smGraph'); if (!svg) return;
 			var W = svg.clientWidth || 800, H = svg.clientHeight || 260;
 			svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-			var moods = sm.moods || [];
+			var set = smActiveSet();
+			var moods = (set && set.moods) || [];
 			var moodW = 150, moodH = 34, sceneW = 118, sceneH = 30, sceneGap = 22, groupGap = 40;
 			var groups = moods.map(function(m) {
 				var n = Math.max(1, (m.scenes || []).length);
@@ -673,18 +744,18 @@
 				});
 				x += g.w + groupGap;
 			});
-			// 第一层之间由 AI 自由切换 → 用虚线把相邻状态节点连起来表示
+			// 第一层之间由 AI 自由切换 → 虚线连接相邻状态节点
 			for (var mi = 1; mi < moodNodes.length; mi++) {
 				var ma = moodNodes[mi - 1], mb = moodNodes[mi];
 				edges.push({ type: 'moodlink', x1: ma.x + ma.w, y1: ma.y + ma.h / 2, x2: mb.x, y2: mb.y + mb.h / 2 });
 			}
 			var parts = [];
-			// 分隔虚线 + 左侧行标(状态=第一层 / 情景=第二层)
+			// 分隔虚线 + 左侧行标
 			var sepY = (moodY + moodH + sceneY) / 2;
 			parts.push('<line x1="0" y1="' + sepY + '" x2="' + W + '" y2="' + sepY + '" stroke="#c2cddb" stroke-width="1" stroke-dasharray="6 4"/>');
 			parts.push('<text x="8" y="' + (moodY + moodH / 2 + 4) + '" font-size="12" fill="#adb5bd">状态</text>');
 			parts.push('<text x="8" y="' + (sceneY + sceneH / 2 + 4) + '" font-size="12" fill="#adb5bd">情景</text>');
-				edges.forEach(function(e) {
+			edges.forEach(function(e) {
 				if (e.type === 'tree') {
 					parts.push('<line x1="' + e.x1 + '" y1="' + e.y1 + '" x2="' + e.x2 + '" y2="' + e.y2 + '" stroke="#c2cddb" stroke-width="1.5"/>');
 				} else if (e.type === 'moodlink') {
@@ -717,6 +788,8 @@
 
 		function smRenderEditor() {
 			var c = $('#smEditor').empty();
+			var set = smActiveSet();
+			if (!set) { c.append('<div class="text-muted small">先建一个状态机（+ 新状态机）。</div>'); return; }
 			var m = smMood(smSelMood);
 			if (!m) { c.append('<div class="text-muted small">点「+ 状态」新建一个角色状态（第一层）。</div>'); return; }
 			if (smSelKind === 'mood') {
@@ -836,7 +909,7 @@
 				$('#smStatus').removeClass('text-success text-danger').text('保存中…');
 				$.ajax({
 					url: '/SaveStateMachine', type: 'POST', contentType: 'application/json',
-					data: JSON.stringify({ enabled: !!sm.enabled, moods: sm.moods || [] }),
+					data: JSON.stringify({ enabled: !!sm.enabled, currentSetId: smSelSet, sets: sm.sets || [] }),
 					success: function() {
 						$('#smStatus').removeClass('text-danger').addClass('text-success').text('已保存');
 						setTimeout(function() { if ($('#smStatus').text() === '已保存') $('#smStatus').text(''); }, 1500);
@@ -857,15 +930,17 @@
 			$('#smSaveBtn').on('click', function() { smSave(true); });
 
 			$('#smAddMoodBtn').on('click', function() {
+				var set = smActiveSet(); if (!set) return;
 				var name = prompt('新状态名称（第一层，如：心情很糟糕）：');
 				if (!name || !name.trim()) return;
-				var id = smNextId(sm.moods);
-				sm.moods.push({ id: id, name: name.trim(), desc: '', scenes: [] });
+				var id = smNextId(set.moods);
+				set.moods.push({ id: id, name: name.trim(), desc: '', scenes: [] });
 				smSelKind = 'mood'; smSelMood = id; smSelScene = 0;
 				smRender(); smSave(true);
 			});
 			$('#smAddSceneBtn').on('click', function() {
-				var m = smMood(smSelMood) || smMood(sm.moods[0] ? sm.moods[0].id : 0);
+				var set = smActiveSet(); if (!set) return;
+				var m = smMood(smSelMood) || smMood(set.moods[0] ? set.moods[0].id : 0);
 				if (!m) { showAlert('先建一个第一层状态', 'warning'); return; }
 				var name = prompt('新情景名称（第二层，如：待机 / 对话）：');
 				if (!name || !name.trim()) return;
@@ -875,7 +950,7 @@
 				smRender(); smSave(true);
 			});
 
-			// 表单输入 → 写回 sm + 防抖保存(图上的名字实时更新,不重渲输入框以保留焦点)
+			// 表单输入 → 写回 sm + 防抖保存(图上名字实时更新,不重渲输入框以保留焦点)
 			$('#smRoot').on('input', '.sm-mood-name, .sm-mood-desc, .sm-scene-name, .sm-scene-desc, .sm-act-name, .sm-act-emote, .sm-act-cd', function() {
 				smApplyInput($(this)); smMarkEditing(); smDrawGraph(); smSave();
 			});
@@ -899,8 +974,8 @@
 			$('#smRoot').on('click', '.sm-del-mood', function() {
 				var id = +$(this).data('mood'); var m = smMood(id); if (!m) return;
 				if (!confirm('删除状态「' + m.name + '」及其全部情景、动作？')) return;
-				sm.moods = sm.moods.filter(function(x) { return x.id !== id; });
-				if (smSelMood === id) { smSelMood = sm.moods[0] ? sm.moods[0].id : 0; smSelKind = 'mood'; smSelScene = 0; }
+				var set = smActiveSet(); if (set) set.moods = set.moods.filter(function(x) { return x.id !== id; });
+				if (smSelMood === id) { smSelKind = 'mood'; smSelMood = set && set.moods[0] ? set.moods[0].id : 0; smSelScene = 0; }
 				smRender(); smSave(true);
 			});
 			$('#smRoot').on('click', '.sm-del-scene', function() {
@@ -923,7 +998,7 @@
 				smSave(true); // 确保动作已入库,/aca pos 才能找到
 				$.ajax({
 					url: '/ArmIdlePos', type: 'POST', contentType: 'application/json',
-					data: JSON.stringify({ moodId: mid, sceneId: sid, name: a.name.trim() }),
+					data: JSON.stringify({ setId: smSelSet, moodId: mid, sceneId: sid, name: a.name.trim() }),
 					success: function(r) { showAlert(r.message || '已准备记录位置', r.armed ? 'success' : 'warning'); },
 					error: function(x, s2, e) { showAlert('记录位置失败: ' + e, 'danger'); }
 				});
@@ -936,7 +1011,7 @@
 				a.hasPos = false; a.x = a.y = a.z = a.yaw = 0; a.territoryId = 0;
 				smRenderEditor();
 				smSave(true);
-				$.ajax({ url: '/ClearIdlePos', type: 'POST', contentType: 'application/json', data: JSON.stringify({ moodId: mid, sceneId: sid, name: a.name || '' }) });
+				$.ajax({ url: '/ClearIdlePos', type: 'POST', contentType: 'application/json', data: JSON.stringify({ setId: smSelSet, moodId: mid, sceneId: sid, name: a.name || '' }) });
 			});
 		}
 

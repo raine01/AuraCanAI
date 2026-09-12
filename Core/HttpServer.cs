@@ -73,6 +73,7 @@ public class HttpServer : IDisposable
 		_methods["SaveObstacles"] = _core.SaveObstaclesJson;
 		_methods["GetStateMachine"] = _ => _core.GetStateMachineJson();
 		_methods["SaveStateMachine"] = _core.SaveStateMachineJson;
+		_methods["SetCurrentStateMachine"] = _core.SetCurrentStateMachineJson;
 		_methods["SetStateMachineEnabled"] = _core.SetStateMachineEnabledJson;
 		_methods["SwitchStateMachine"] = _core.SwitchStateMachineJson;
 		_methods["ArmIdlePos"] = _core.ArmIdlePosJson;

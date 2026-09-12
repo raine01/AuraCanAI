@@ -29,6 +29,7 @@ public sealed class StateMachine
 	private DateTime _idleMoveDeadline = DateTime.MinValue;
 
 	// ===== 位置记录武装(前端某行点「记录位置」→ 游戏内 /aca pos 不带名写进这条) =====
+	public int ArmedSetId { get; private set; }
 	public int ArmedMoodId { get; private set; }
 	public int ArmedSceneId { get; private set; }
 	public string ArmedActionName { get; private set; } = "";
@@ -42,7 +43,8 @@ public sealed class StateMachine
 	// ==================== 当前状态访问 ====================
 
 	public bool Enabled => _config.StateMachineEnabled;
-	public SmMood? CurrentMood => _config.SmMoods.FirstOrDefault(m => m.id == _config.SmCurrentMoodId);
+	public SmSet? CurrentSet => _config.SmSets.FirstOrDefault(s => s.id == _config.SmCurrentSetId);
+	public SmMood? CurrentMood => CurrentSet?.moods.FirstOrDefault(m => m.id == _config.SmCurrentMoodId);
 	public SmScene? CurrentScene => CurrentMood?.scenes.FirstOrDefault(s => s.id == _config.SmCurrentSceneId);
 	public string CurrentMoodName => CurrentMood?.name ?? "";
 	public string CurrentSceneName => CurrentScene?.name ?? "";
@@ -73,9 +75,10 @@ public sealed class StateMachine
 	/// <summary>切换第一层(角色状态)——自由切换,不受路径限制。</summary>
 	public (bool ok, string message) SwitchMood(string key)
 	{
-		if (_config.SmMoods.Count == 0) return (false, "状态机还没有配置第一层(角色状态)");
-		var m = Match(_config.SmMoods, key, x => x.name);
-		if (m == null) return (false, $"没有叫「{key}」的角色状态;可用: {Names(_config.SmMoods, x => x.name)}");
+		var set = CurrentSet;
+		if (set == null || set.moods.Count == 0) return (false, "当前状态机还没有配置第一层(角色状态)");
+		var m = Match(set.moods, key, x => x.name);
+		if (m == null) return (false, $"没有叫「{key}」的角色状态;可用: {Names(set.moods, x => x.name)}");
 		if (_config.SmCurrentMoodId == m.id) return (true, $"已经处于「{m.name}」状态" + (m.scenes.Count > 0 ? $";该状态下有情景: {Names(m.scenes, x => x.name)}" : ";(还没有配置情景)"));
 		_config.SmCurrentMoodId = m.id;
 		_config.SmCurrentSceneId = m.scenes.Count > 0 ? m.scenes[0].id : 0;
@@ -213,24 +216,25 @@ public sealed class StateMachine
 	// ==================== 位置记录 ====================
 
 	/// <summary>武装「位置记录」目标(前端某行的「记录位置」按钮)。</summary>
-	public void ArmPos(int moodId, int sceneId, string actionName)
+	public void ArmPos(int setId, int moodId, int sceneId, string actionName)
 	{
+		ArmedSetId = setId;
 		ArmedMoodId = moodId;
 		ArmedSceneId = sceneId;
 		ArmedActionName = actionName ?? "";
 	}
 
-	public void ClearArm() => ArmPos(0, 0, "");
+	public void ClearArm() => ArmPos(0, 0, 0, "");
 
 	/// <summary>记录当前位置到动作的「位置」字段(/aca pos [动作名];不带名 = 用武装的那条)。</summary>
 	public string RecordPosition(string actionName)
 	{
-		(int moodId, int sceneId, string target) = (-1, -1, (actionName ?? "").Trim());
+		(int setId, int moodId, int sceneId, string target) = (-1, -1, -1, (actionName ?? "").Trim());
 		if (target.Length == 0)
 		{
 			if (string.IsNullOrEmpty(ArmedActionName))
 				return "没有指定动作:请带动作名(/aca pos 坐下),或先到网页状态机里点该动作的「记录位置」";
-			(moodId, sceneId, target) = (ArmedMoodId, ArmedSceneId, ArmedActionName);
+			(setId, moodId, sceneId, target) = (ArmedSetId, ArmedMoodId, ArmedSceneId, ArmedActionName);
 		}
 		var tf = _core.GetLocalTransform();
 		if (tf == null) return "未登录/无玩家,无法记录位置";
@@ -240,14 +244,14 @@ public sealed class StateMachine
 		SmScene? scene;
 		if (moodId > 0)
 		{
-			scene = _config.SmMoods.FirstOrDefault(m => m.id == moodId)?.scenes.FirstOrDefault(s => s.id == sceneId);
+			scene = _config.SmSets.FirstOrDefault(x => x.id == setId)?.moods.FirstOrDefault(m => m.id == moodId)?.scenes.FirstOrDefault(s => s.id == sceneId);
 			action = scene?.actions.FirstOrDefault(a => a.name == target);
 		}
 		else
 		{
 			scene = CurrentScene;
 			action = scene?.actions.FirstOrDefault(a => a.name == target)
-				?? _config.SmMoods.SelectMany(m => m.scenes).SelectMany(s => s.actions).FirstOrDefault(a => a.name == target);
+				?? _config.SmSets.SelectMany(x => x.moods).SelectMany(m => m.scenes).SelectMany(s => s.actions).FirstOrDefault(a => a.name == target);
 		}
 		if (action == null) return $"找不到动作「{target}」(要在当前情景的动作列表里,名字要完全一致)";
 
@@ -263,9 +267,9 @@ public sealed class StateMachine
 	}
 
 	/// <summary>清空某动作的位置(前端「清空位置」)。</summary>
-	public string ClearPosition(int moodId, int sceneId, string actionName)
+	public string ClearPosition(int setId, int moodId, int sceneId, string actionName)
 	{
-		var scene = _config.SmMoods.FirstOrDefault(m => m.id == moodId)?.scenes.FirstOrDefault(s => s.id == sceneId);
+		var scene = _config.SmSets.FirstOrDefault(x => x.id == setId)?.moods.FirstOrDefault(m => m.id == moodId)?.scenes.FirstOrDefault(s => s.id == sceneId);
 		var a = scene?.actions.FirstOrDefault(x => x.name == actionName);
 		if (a == null) return "找不到该动作";
 		a.hasPos = false;
@@ -281,14 +285,15 @@ public sealed class StateMachine
 		if (!_config.StateMachineEnabled) return "";
 		var sb = new StringBuilder();
 		sb.Append("## 状态机(你当前的状态,切换用工具)\n");
-		if (_config.SmMoods.Count == 0)
+		var setNow = CurrentSet;
+		if (setNow == null || setNow.moods.Count == 0)
 		{
 			sb.Append("- 还没有配置角色状态;不用管状态机。\n");
 			return sb.ToString();
 		}
 		var mood = CurrentMood;
 		var scene = CurrentScene;
-		sb.Append($"- 全部角色状态(第一层,用 switch_mood 自由切换): {Names(_config.SmMoods, x => x.name)}\n");
+		sb.Append($"- 当前状态机:「{setNow.name}」;全部角色状态(第一层,用 switch_mood 自由切换): {Names(setNow.moods, x => x.name)}\n");
 		if (mood == null)
 		{
 			sb.Append("- 当前没有选定状态;请先用 switch_mood 选一个。\n");
