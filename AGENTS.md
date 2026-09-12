@@ -609,3 +609,12 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
   2. `switch_mood` 工具描述同步(加上“别人要求时不要拒绝直接切”)。
   3. `AuraCanAiCore.BuildPersonaSystemMessage()` 抽出(ResetChatHistory 复用);`ProcessBodyReplyAsync` 工具轮里若出现 `switch_mood`/`switch_scene`,把 `msgs[0]`(persona system)**就地换成新人设**,使**本轮**即按新状态回应(日志「状态切换后人设已刷新」)。
 - ⚠️ 同轮限制:工具枚举是请求时生成的,所以“要求上皮”的那一轮 `switch_scene` 枚举还是旧状态的情景;要切情景/顶阶情景需下一轮(模型会看到新枚举)。
+
+## 「坐下去又站起来」修复(2026-09-12,用户看日志发现)
+- 日志:AI `rp_body_action(sit)`(无 target)→ 选「全息显示器」→ `/sit`(12:45:06.244)→ 报「第1次坐正(偏差 0.00m)」→ 结束。
+- 根因:**`/sit` 是开关**。若角色本来已经坐着(用户手动坐下/上一次坐姿未解除),再发 `/sit` 会**站起身**;而旧的成功判定**只看位置**(人站在座位点,偏差同样 0.00m)→ 假报“坐正”,人留在站立状态。
+- 关键新工具:`AuraCanAiCore.GetSeatedState()` —— 用 `EmoteController.GetPosture()`(`SittingInChair`/`SittingOnGround`/`Dozing`),返回 `bool?`(null=签名不可用)。FF14 没有简单“坐着”旗标,这是唯一可靠判定;比位置推断准。
+- MovementController 座流程改:
+  - `TriggerSit`:**已坐着 → 跳过 /sit**(不发就不会站起)。
+  - `Confirm`:成功 = 位置≤0.35m **且** `GetSeatedState()!=false`(null 时回退位置判定);位置到了但没坐下 → **原地重发 /sit**(站着→坐下);人还站着且不在座位点 → 回 `Walk` 重走(不再乱发 /sit 坐半路);只有**真的坐着但歪**才走旧的“站起→走→重坐”。
+- ⚠️ 待实机:`GetSeatedState()` 的 MemberFunction 是否可用(日志「坐正(... 坐下=True)」);若恒为 null,则回退位置判定(至少不再误判“已坐却站起”仍能受益于 TriggerSit 的跳过逻辑?——不会:null 时不跳过。属待验证项)。

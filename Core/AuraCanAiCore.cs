@@ -1572,6 +1572,22 @@ public class AuraCanAiCore : IDisposable
 		return (local.Position, local.Rotation, _clientState.TerritoryType);
 	}
 
+	/// <summary>本地玩家是否坐着:true/false;判定不可用(CS 签名失败)返回 null。
+	/// 用 EmoteController.GetPosture()(SittingInChair / SittingOnGround / Dozing)——FF14 没有简单的“坐着”旗标,
+	/// 这是唯一可靠判定(比位置推断准)。座流程用它避免“已坐着又发 /sit → 站起来”的切换反转。需框架线程。</summary>
+	public unsafe bool? GetSeatedState()
+	{
+		try
+		{
+			var local = _objectTable.LocalPlayer;
+			if (local == null || local.Address == IntPtr.Zero) return null;
+			var ch = (FFXIVClientStructs.FFXIV.Client.Game.Character.BattleChara*)local.Address;
+			var posture = ch->EmoteController.GetPosture().ToString();
+			return posture is "SittingInChair" or "SittingOnGround" or "Dozing";
+		}
+		catch { return null; }
+	}
+
 	/// <summary>演奏就绪状态检测(主声部=自己):是否诗人 + 是否演奏模式,附提示文本。
 	/// 游戏对象必须在框架线程访问(前端 HTTP 轮询会跨线程,这里自动切换)。</summary>
 	public (bool isBard, bool isPerforming, string hint) GetPerformStatus()

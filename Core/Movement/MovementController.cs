@@ -571,34 +571,62 @@ public sealed class MovementController : IDisposable
 				_override.Active = false;
 				_sitPhase = SitPhase.Confirm;
 				_sitStageAt = now;
-				var ok = _core.ExecuteSitMethod();
-				_log.Information(ok ? "坐: 坐法已触发" : "坐: 坐法未成功触发(检查配置的宏/指令)");
+				// ⚠️ /sit 是开关:已经坐着再发就会站起身(用户实测“怎么站起来了”)。坐着就跳过。
+				if (_core.GetSeatedState() == true)
+				{
+					_log.Information("坐: 已经坐着,跳过 /sit(再发会站起身)");
+				}
+				else
+				{
+					var ok = _core.ExecuteSitMethod();
+					_log.Information(ok ? "坐: 坐法已触发" : "坐: 坐法未成功触发(检查配置的宏/指令)");
+				}
 				break;
 			case SitPhase.Confirm:
 				_override.Active = false;
-				// 等坐姿生效后,校验是否坐正(与记录点平面距离 ≤0.35m);歪了且未满 3 次 → 起立挪位重试
+				// 等坐姿生效后,用【真实坐姿(GetPosture)】+【与记录点平面距离≤0.35m】两个条件校验;
+				// 只看位置是不够的:/sit 没生效时人站着但位置也在座位点上(旧的“假坐正”根因)。
 				if ((now - _sitStageAt).TotalSeconds >= 1.4)
 				{
 					var dSeat = PlaneDistance(myPos, new System.Numerics.Vector3(_sitSeat.X, myPos.Y, _sitSeat.Z));
-					if (dSeat <= SitCheckTolerance)
+					var seated = _core.GetSeatedState();
+					var atSeat = dSeat <= SitCheckTolerance;
+					if (atSeat && seated != false) // 坐姿未知(null)时回退到位置判定
 					{
-						_log.Information($"坐: 第{_sitAttempts}次坐正(与记录点偏差 {dSeat:F2}m)");
+						_log.Information($"坐: 第{_sitAttempts}次坐正(偏差 {dSeat:F2}m,坐下={seated?.ToString() ?? "?"})");
 						Finish(MoveOutcome.SatDown, $"座位 {_sitSeat.Label()}");
 					}
 					else if (_sitAttempts >= MaxSitAttempts)
 					{
-						_log.Warning($"坐: 尝试 {_sitAttempts} 次仍未坐正(偏差 {dSeat:F2}m),停下不动");
+						_log.Warning($"坐: 尝试 {_sitAttempts} 次仍未坐正(偏差 {dSeat:F2}m,坐下={seated?.ToString() ?? "?"}),停下不动");
 						Finish(MoveOutcome.Failed, "多次尝试没坐正,已停下(建议 /aca seatstand 校准或手调)");
 					}
-					else
+					else if (atSeat)
 					{
-						// 坐歪 → 站起来(发一次坐法指令 /sit 站起),然后朝目标方向直走 2 米再重新坐下
+						// 位置就在座位点但没坐下(如 /sit 没生效)→ 原地再发一次坐法(站着→会坐下,不会站起)
+						_sitAttempts++;
+						_sitStageAt = now;
+						_core.ExecuteSitMethod();
+						_log.Information($"坐: 位置到了但没坐下,原地重发坐法(第{_sitAttempts}次)");
+					}
+					else if (seated == true)
+					{
+						// 坐歪了:先站起(/sit),再朝目标方向直走 1 米后重新坐下
 						_sitAttempts++;
 						_standStartPos = myPos;
 						_core.ExecuteSitMethod(); // /sit 再触发一次 = 站起
 						_sitPhase = SitPhase.StandUp;
 						_sitStageAt = now;
-						_log.Information($"坐: 第{_sitAttempts - 1}次坐歪(偏差 {dSeat:F2}m),站起后朝目标走 2 米重试");
+						_log.Information($"坐: 第{_sitAttempts - 1}次坐歪(偏差 {dSeat:F2}m),站起后朝目标走 1 米重试");
+					}
+					else
+					{
+						// 人还站着且不在座位点(走位没到位)→ 回 Walk 重新走过去(不要发 /sit,否则会坐在半路)
+						_sitAttempts++;
+						_pathPts = null;
+						_sitPhase = SitPhase.Walk;
+						_sitStageAt = now;
+						_log.Information($"坐: 还没走到座位(偏差 {dSeat:F2}m),重新走位");
 					}
 				}
 				break;
