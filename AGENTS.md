@@ -594,3 +594,8 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - 示例/默认状态机套名:「默认」→「**白屿涟音**」(`EnsureStateMachineState` 播种 + `SaveStateMachineJson` 兜底;并把已存在的唯一「默认」套改名)。
 - 角色删除校验:`character.html` 删角色前先查 `smRoleInUse(角色名)`,若被任何状态机情景引用则拒绝并提示(列出处);角色**改名**时 `smRenameRoleRefs()` 同步状态机里的 roleName 引用并保存,避免绑定静默失效。
 - 跨套切换:用户明确「不希望从一个状态机切到另一个」→ 保持现状(仅前端页签手动切,无 AI 工具)。
+
+## 套名迁移补漏 + /aca smreset(2026-09-12)
+- `EnsureStateMachineState` 的套名改名规则扩为:单套且名为「默认」**或「状态机1」** → 改名「白屿涟音」(之前只改「默认」,迁移来的「状态机1」漏了)。
+- 新增 `/aca smreset`(`AuraCanAiCore.ResetStateMachine()`):把状态机重置为默认示例(单套「白屿涟音」= 皮下/皮上);命令帮助串已加。
+- 已直接修好用户配置里的套名(仅改 name,未动 moods)。

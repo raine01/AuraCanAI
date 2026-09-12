@@ -1522,8 +1522,8 @@ public class AuraCanAiCore : IDisposable
 			_config.SmSets[0].moods = Defaults.DefaultStateMachine();
 			changed = true;
 		}
-		// ③.5 旧示例套名「默认」→「白屿涟音」
-		if (_config.SmSets.Count == 1 && _config.SmSets[0].name == "默认")
+		// ③.5 旧示例套名(「默认」/「状态机1」)→「白屿涟音」(单套时)
+		if (_config.SmSets.Count == 1 && (_config.SmSets[0].name == "默认" || _config.SmSets[0].name == "状态机1"))
 		{
 			_config.SmSets[0].name = "白屿涟音";
 			changed = true;
@@ -3207,6 +3207,20 @@ public class AuraCanAiCore : IDisposable
 		RoleActions?.Reset();
 		ResetChatHistory();
 		return new { message = "LLM配置已重置为默认(DeepSeek Key 保留)", result = "success" };
+	}
+
+	/// <summary>把状态机重置为默认示例(单套「白屿涟音」:皮下/皮上 各两个情景)。/aca smreset</summary>
+	public string ResetStateMachine()
+	{
+		_config.SmSets = new List<SmSet> { new() { id = 1, name = "白屿涟音", moods = Defaults.DefaultStateMachine() } };
+		_config.SmCurrentSetId = 1;
+		_config.SmCurrentMoodId = _config.SmSets[0].moods[0].id;
+		_config.SmCurrentSceneId = _config.SmSets[0].moods[0].scenes[0].id;
+		SaveConfig();
+		State.ResetIdle();
+		ResetChatHistory();
+		Log("[状态机] 已重置为默认示例(单套「白屿涟音」)");
+		return "状态机已重置为默认示例:单套「白屿涟音」(皮下/皮上,各两个情景)";
 	}
 
 	// ==================== 状态机(HTTP:前端 character.html 顶部视图) ====================
