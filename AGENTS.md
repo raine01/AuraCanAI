@@ -618,3 +618,12 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
   - `TriggerSit`:**已坐着 → 跳过 /sit**(不发就不会站起)。
   - `Confirm`:成功 = 位置≤0.35m **且** `GetSeatedState()!=false`(null 时回退位置判定);位置到了但没坐下 → **原地重发 /sit**(站着→坐下);人还站着且不在座位点 → 回 `Walk` 重走(不再乱发 /sit 坐半路);只有**真的坐着但歪**才走旧的“站起→走→重坐”。
 - ⚠️ 待实机:`GetSeatedState()` 的 MemberFunction 是否可用(日志「坐正(... 坐下=True)」);若恒为 null,则回退位置判定(至少不再误判“已坐却站起”仍能受益于 TriggerSit 的跳过逻辑?——不会:null 时不跳过。属待验证项)。
+
+## 「坐错边(左右不分)」修复(2026-09-12,用户实测)
+- 日志实证 `GetSeatedState()` 可用(「坐正(偏差 0.00m,坐下=True)」),且「已经坐着,跳过 /sit」已生效 → 上一个修复有效。
+- 用户测试:说「请坐在我右边」,AI 调 `rp_body_action(sit)`(**没带 target**)→ 坐了最近的座(玩家的左边)。
+- 根因:`list_seats(near=玩家)` 只给「距该玩家 X.Xm」,**没有左右方位**,模型无法挑“那人的右边”;而 `GetLookingDirection` 是相对**自己**的。
+- 修复:
+  - `list_seats(near=X)` 改成输出「在{X}{方位}(有人/空)」,方位 = `GetLookingDirection(座位, X.Position, X.Rotation)`(相对**那个玩家面朝方向**的左/右/前/后;算法已验证左右不翻)。
+  - 末尾提示、`list_seats` 工具描述、`rp_body_action.target` 描述、场景注入句都补上:「要坐某人左/右边 → 先 list_seats(near=那人) 看方位,再挑座位名/#id」。
+- ⚠️ 待实机:再说「坐我右边」,模型应先调 `list_seats(near=…)` 再 `sit` 到正确侧的座位。
