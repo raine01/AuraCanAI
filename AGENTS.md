@@ -661,3 +661,8 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
   - `switch_mood` 工具新增可选 `scene` 参数;场景注入列出「每个状态 → 它的情景」,并提示“和人互动选对话/接待,独自用待机,一步切到位”。
   - `RunInfoToolCore` 的 `switch_mood` 解析 `scene`。
 - ⚠️ 待实机:长句应变多条(日志 `LLM 台词已发(/p,1/2)…`);切皮上时应落在「对话」而不是「待机」。
+
+## 拆条上限 + 打字节奏(2026-09-12 追加)
+- **一轮台词总字数上限 `LineTotalMaxChars=50`**:超出先按句末标点截断(取上限内最后一个句末标点;不足上限一半则硬截),丢失的内容不再发(日志「LLM 台词超长已截断」)。
+- **多条间隔按字数模拟打字**:`LineGapFor(line)=clamp(350 + 字数*70, 500, 3500)` ms(替代固定 650ms)。
+- 常量:`LineTotalMaxChars=50 / LineMaxLen=45 / LineMaxCount=3 / LineGapBaseMs=350 / LineGapPerCharMs=70 / LineGapMaxMs=3500`。

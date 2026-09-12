@@ -2663,16 +2663,30 @@ public class AuraCanAiCore : IDisposable
 	/// <summary>发送助手台词:回复跟随触发消息的来源频道(channelNo),无任何 /s 兜底;
 	/// 悄悄话 0D 用 /t 回复对方(replyAddress=名字@服务器);频道无对应命令/缺回复地址时丢弃该台词(不入历史)。
 	/// 历史与网页同步。</summary>
-	// ===== 多条拆发(2026-09-12 用户口径:话太长可以切成多条发) =====
-	private const int LineMaxLen = 45;   // 单条尽量不超过这么多字(超出按句末标点再拆)
-	private const int LineMaxCount = 3;  // 一轮最多拆成几条(再多就并进最后一条)
-	private const int LineGapMs = 650;   // 多条之间的发送间隔(毫秒)
+	// ===== 多条拆发(2026-09-12 用户口径:话太长可以切成多条发;总量不超上限) =====
+	private const int LineTotalMaxChars = 50; // 一轮台词总字数上限(超出就按句末标点截断,丢掉多余的)
+	private const int LineMaxLen = 45;        // 单条尽量不超过这么多字(超出按句末标点再拆)
+	private const int LineMaxCount = 3;       // 一轮最多拆成几条(再多就并进最后一条)
+	private const int LineGapBaseMs = 350;    // 多条之间的基础间隔(毫秒)
+	private const int LineGapPerCharMs = 70;  // 每条按字数再延时(模拟打字速度)
+	private const int LineGapMaxMs = 3500;    // 间隔上限
 
-	/// <summary>把一段台词按换行/句末标点拆成多条(尽量每条 ≤ LineMaxLen,最多 LineMaxCount 条)。</summary>
-	private static List<string> SplitOutgoingLines(string text)
+	/// <summary>把一段台词按换行/句末标点拆成多条(尽量每条 ≤ LineMaxLen);
+	/// 总量超 LineTotalMaxChars 时先按句末标点截断(宁短勿长)。</summary>
+	private static List<string> SplitOutgoingLines(string text, out bool truncated)
 	{
+		truncated = false;
 		var t = (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Trim();
 		if (t.Length == 0) return new List<string>();
+		// 0) 总量截断:超过上限就在上限内最后一个句末标点处收尾(找不到则硬截)
+		if (t.Length > LineTotalMaxChars)
+		{
+			var cut = -1;
+			for (var i = 0; i < LineTotalMaxChars && i < t.Length; i++)
+				if ("。！？!?…\n".IndexOf(t[i]) >= 0) cut = i;
+			t = cut >= LineTotalMaxChars / 2 ? t[..(cut + 1)].Trim() : t[..LineTotalMaxChars].Trim();
+			truncated = true;
+		}
 		var paras = t.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 		var lines = new List<string>();
 		foreach (var p in paras)
@@ -2699,6 +2713,10 @@ public class AuraCanAiCore : IDisposable
 		}
 		return lines;
 	}
+
+	/// <summary>多条之间的间隔:按上一条字数模拟打字/敲字速度(基础 + 每字 N 毫秒,封顶)。</summary>
+	private static int LineGapFor(string line)
+		=> Math.Clamp(LineGapBaseMs + (line?.Length ?? 0) * LineGapPerCharMs, 500, LineGapMaxMs);
 
 	/// <summary>发送 LLM 台词:按换行/句末标点拆成多条依次发出(像真人一句句打出来);历史里只存整段一条。
 	/// 频道路由:只回对应频道,不用 /s 兜底;悄悄话回 /t。</summary>
@@ -2749,10 +2767,11 @@ public class AuraCanAiCore : IDisposable
 		}
 
 		// 2) 拆条 → 依次发送(条间留间隔);历史里只存整段一条(不让模型看到自己被拆成多条)
-		var lines = SplitOutgoingLines(stripped)
+		var lines = SplitOutgoingLines(stripped, out var truncated)
 			.Select(l => System.Text.RegularExpressions.Regex.Replace(l, "[\u0000-\u001F]", ""))
 			.Where(l => l.Length > 0).ToList();
 		if (lines.Count == 0) return;
+		if (truncated) Log($"LLM 台词超长已截断(总上限 {LineTotalMaxChars} 字): 原文 {TruncateLog(stripped, 80)}");
 		lock (_historyLock) _chatHistory.Add(new Message { content = string.Join("\n", lines), role = "assistant" });
 
 		for (var i = 0; i < lines.Count; i++)
@@ -2763,7 +2782,7 @@ public class AuraCanAiCore : IDisposable
 			Log($"LLM 台词已发({cmd},{i + 1}/{lines.Count}): {(ok ? "成功" : "失败(未登录等)")} | {line}");
 			if (ok)
 				lock (_historyLock) _recentSelfLines.Add((line, DateTime.Now));
-			if (i < lines.Count - 1) await Task.Delay(LineGapMs);
+			if (i < lines.Count - 1) await Task.Delay(LineGapFor(line)); // 按字数模拟打字速度
 		}
 	}
 
