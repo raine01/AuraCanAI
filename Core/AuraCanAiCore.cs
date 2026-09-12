@@ -2370,8 +2370,8 @@ public class AuraCanAiCore : IDisposable
 							var pos0 = GetLookingDirection(obj.Position, local.Position, local.Rotation);
 							sb0.Append($" {n0}({race0}{gender0}{(string.IsNullOrEmpty(status0) ? "" : "," + status0)})在你{pos0}");
 						}
-						if (!any0) return "周围没有其他玩家";
-						sb0.Append("; 想细看某人用 lookup_player 带名字");
+						if (!any0) return "周围没有其他玩家;" + BuildSelfInfo();
+						sb0.Append("; 想细看某人用 lookup_player 带名字。" + BuildSelfInfo());
 						return sb0.ToString();
 					}
 					var p = FindPlayerByName(name);
@@ -2400,6 +2400,42 @@ public class AuraCanAiCore : IDisposable
 			LogErr($"信息工具执行异常: {e.Message}");
 			return $"查询失败:{e.Message}";
 		}
+	}
+
+	/// <summary>本地玩家的“种族+性别”(如 敖龙族女);取不到返回空串。</summary>
+	private string SelfRaceGender()
+	{
+		try
+		{
+			if (_objectTable.LocalPlayer is IPlayerCharacter me)
+			{
+				var race = GetRaceName(me.Customize.Length > 0 ? me.Customize[0] : (byte)0);
+				var gender = me.Customize.Length > 1 && me.Customize[1] == 1 ? "女" : "男";
+				return race + gender;
+			}
+		}
+		catch { }
+		return "";
+	}
+
+	/// <summary>自身信息(供 lookup_player 回答“你是谁/你什么种族”):名字/种族/性别/在线状态/当前动作。需框架线程。</summary>
+	private string BuildSelfInfo()
+	{
+		try
+		{
+			var local = _objectTable.LocalPlayer;
+			if (local == null) return "";
+			var name = GetCleanName(local.Name.TextValue);
+			var race = ""; var gender = "";
+			if (local is IPlayerCharacter me)
+			{
+				race = GetRaceName(me.Customize.Length > 0 ? me.Customize[0] : (byte)0);
+				gender = me.Customize.Length > 1 && me.Customize[1] == 1 ? "女" : "男";
+			}
+			var status = GetOnlineStatusName(local.OnlineStatus.RowId);
+			return $"你自己:{name}({race}{gender}{(string.IsNullOrEmpty(status) ? "" : "," + status)}),{Movement.StatusText()}";
+		}
+		catch { return ""; }
 	}
 
 	/// <summary>身体工具集:rp_body_action(动作)+ 按需信息查询(lookup_player 等,模型视情况主动调,避免每轮全量塞入)</summary>
@@ -2666,13 +2702,14 @@ public class AuraCanAiCore : IDisposable
 		truncated = false;
 		var t = (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Trim();
 		if (t.Length == 0) return new List<string>();
-		// 0) 总量截断:超过上限就在上限内最后一个句末标点处收尾(找不到则硬截)
+		// 0) 总量截断:超过上限就在上限内最后一个**强句末标点或换行**处收尾。
+		// ⚠️ 不把 `…` 当候选:省略号常在句中,切在这里会把半句当成完整条发出去(用户实测「要说ai……」)。
 		if (t.Length > LineTotalMaxChars)
 		{
 			var cut = -1;
 			for (var i = 0; i < LineTotalMaxChars && i < t.Length; i++)
-				if ("。！？!?…\n".IndexOf(t[i]) >= 0) cut = i;
-			t = cut >= LineTotalMaxChars / 2 ? t[..(cut + 1)].Trim() : t[..LineTotalMaxChars].Trim();
+				if ("。！？!?\n".IndexOf(t[i]) >= 0) cut = i;
+			t = cut >= 8 ? t[..(cut + 1)].Trim() : t[..LineTotalMaxChars].Trim();
 			truncated = true;
 		}
 		var paras = t.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
@@ -2684,7 +2721,7 @@ public class AuraCanAiCore : IDisposable
 			foreach (var ch in p)
 			{
 				sb.Append(ch);
-				if ("。！？!?…".IndexOf(ch) >= 0 && sb.Length >= LineMaxLen * 0.6)
+				if ("。！？!?".IndexOf(ch) >= 0 && sb.Length >= LineMaxLen * 0.6)
 				{
 					lines.Add(sb.ToString().Trim());
 					sb.Clear();
@@ -2693,6 +2730,18 @@ public class AuraCanAiCore : IDisposable
 			if (sb.Length > 0) lines.Add(sb.ToString().Trim());
 		}
 		lines.RemoveAll(s => s.Length == 0);
+		// 兜底:**仅当发生过截断**时,丢掉结尾没说完的碎片(宁缺不残)。
+		// ⚠️ 不能无条件丢弃:正常短回复（如“在呢在呢,咋啦”）末尾也没有句号，会被误删。
+		if (truncated)
+		{
+			while (lines.Count > 0)
+			{
+				var last = lines[^1];
+				var endsOk = last.Length > 0 && "。！？!?~——’」』）)】]".IndexOf(last[^1]) >= 0;
+				if (endsOk || last.Length >= 14) break;
+				lines.RemoveAt(lines.Count - 1);
+			}
+		}
 		if (lines.Count > LineMaxCount)
 		{
 			var keep = lines.Take(LineMaxCount - 1).ToList();
@@ -2884,7 +2933,8 @@ public class AuraCanAiCore : IDisposable
 				}
 				else sb.Append("身边没有其他人; ");
 			}
-			sb.Append("你:").Append(Movement.StatusText()).Append(". ");
+			var selfMeta = SelfRaceGender();
+			sb.Append("你:").Append(string.IsNullOrEmpty(selfMeta) ? "" : selfMeta + ",").Append(Movement.StatusText()).Append(". ");
 			sb.Append(IsInParty() ? "队伍:在小队; " : "队伍:一个人(不在小队); ");
 			// 最近一次移动结果(25 秒内),供模型理解刚才动作的成败
 			if (_lastMoveResult != null && (DateTime.Now - _lastMoveResultAt).TotalSeconds <= 25)

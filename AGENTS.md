@@ -781,3 +781,10 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
    invite/accept 交给程序或命令(`/aca party invite|accept` 保留);`PartyAction(op,target)` 方法保留供命令用。
    + 修了 `OutputFormatRule` 缺 `\n` 导致两条规则粘连的 bug。
 - 工具集现在 6 项:rp_body_action / face_player / lookup_player / rp_emote / leave_party / leave_scene。
+
+## 拆条半句 + lookup_player 自身信息(2026-09-12)
+- **半句 bug**:50 字截断时取“上限内最后一个句末标点”,而 `…` 被当成句末 → 正好切在「要说ai……」上,半句独立成条发出(用户实测)。
+  - 修复:截断只认**强句末标点/换行**(`。！？!?` 与 `\n`),不算 `…`;段内拆条同样不用 `…`;并加“**仅当发生截断时**丢掉结尾没说完的短碎片”兜底。
+  - ⚠️ 兜底必须限定在 `truncated` 时:正常短回复(「在呢在呢,咋啦」)末尾也没句号,无条件丢会误删。
+- **lookup_player 补自身信息**:新增 `BuildSelfInfo()`(名字/种族/性别/在线状态/当前动作),在“列在场玩家”返回里追加
+  `你自己:mm(敖龙族女,状态),空闲`;场景注入的 `你:` 也带上种族性别(`SelfRaceGender()`),方便回答“你什么种族”。
