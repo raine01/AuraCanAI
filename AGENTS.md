@@ -627,3 +627,17 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
   - `list_seats(near=X)` 改成输出「在{X}{方位}(有人/空)」,方位 = `GetLookingDirection(座位, X.Position, X.Rotation)`(相对**那个玩家面朝方向**的左/右/前/后;算法已验证左右不翻)。
   - 末尾提示、`list_seats` 工具描述、`rp_body_action.target` 描述、场景注入句都补上:「要坐某人左/右边 → 先 list_seats(near=那人) 看方位,再挑座位名/#id」。
 - ⚠️ 待实机:再说「坐我右边」,模型应先调 `list_seats(near=…)` 再 `sit` 到正确侧的座位。
+
+## 坐位「交给程序选」(2026-09-12,用户口径)
+- 用户反馈:模型会自己在台词里念「右边，那必须是 #4 了，坐下了啊」——把选座逻辑/编号写进台词,很假。
+- 口径:**模型只传方位参数,程序自己找座,只告诉模型“坐到了什么样的位置”**。
+- 实现:
+  - `rp_body_action` 新增可选参数 **`side`**(enum: left/right/front/back/near),仅 `sit` 且 `target` 是玩家时用。
+  - `AuraCanAiCore`:新增 `NormalizeSide()`(中英方位归一化)、`RelativeAngleDeg()`(相对朝向夹角,+右-左)、`SeatOnSide()`(22.5/157.5 扇区判定)、`DescribeSeatSide()`(如 “奥·乌儿的右侧 1米”)。
+  - `ResolveSeatForSitting(selector, side, out error)` 新重载(旧的保留,`/aca seatgo` 走它):target=玩家名 + side → 先在该侧的空座里取最近的;该侧没空座则**退回最近空座**(结果里会说明实际方位)。
+  - `MovementController.SitOnSeat(selector, side="")`;新增 `CurrentSitSeat` 供上层描述。
+  - `ExecuteBodyAction(action, target, side="")`;`ProcessBodyReplyAsync` 解析 `side`。
+  - **工具结果不再给座位编号**:只回「开始走到 {方位} 的空座坐下」,避免模型念 #4。
+  - 提示同步:`rp_body_action` 描述/target/side 说明、场景注入句、`OutputFormatRule` 新增「禁止说出座位编号/工具名/参数/过程描述」。
+  - `list_seats(near=X)` 仍保留“在 X 的哪侧”输出(其他用途),但坐位主路径已不要求模型查它。
+- ⚠️ 待实机:说「坐我右边」→ 模型应调 `rp_body_action(sit, target=奥·乌儿, side=right)`,日志 `去坐 #N` 由程序挑,台词里不应出现 #编号。

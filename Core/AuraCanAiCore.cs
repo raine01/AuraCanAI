@@ -1001,19 +1001,74 @@ public class AuraCanAiCore : IDisposable
 
 	/// <summary>按选择器解析"要坐的座位":空=离自己最近可用空座;#N=按 id;其他=名字部分匹配。
 	/// 失败时 seat=null,error 给原因。需要主线程(ObjectTable),已自动编组。</summary>
-	public SeatPoint? ResolveSeatForSitting(string selector, out string error)
+	public SeatPoint? ResolveSeatForSitting(string selector, out string error) => ResolveSeatForSitting(selector, "", out error);
+
+	/// <summary>同前,多一个方位 side(left/right/front/back/near;空=不限):
+	/// selector 是玩家名时,优先选该玩家指定一侧的空座(那一侧没空座则退回最近空座)。</summary>
+	public SeatPoint? ResolveSeatForSitting(string selector, string side, out string error)
 	{
-		if (_framework.IsInFrameworkUpdateThread) return ResolveSeatForSittingCore(selector, out error);
+		if (_framework.IsInFrameworkUpdateThread) return ResolveSeatForSittingCore(selector, side, out error);
 		var r = _framework.RunOnFrameworkThread(() =>
 		{
-			var res = ResolveSeatForSittingCore(selector, out var e);
+			var res = ResolveSeatForSittingCore(selector, side, out var e);
 			return (res, e);
 		}).GetAwaiter().GetResult();
 		error = r.e;
 		return r.res;
 	}
 
-	private SeatPoint? ResolveSeatForSittingCore(string selector, out string error)
+	/// <summary>方位参数归一化(left/right/front/back/near);识别不了返回空串。</summary>
+	private static string NormalizeSide(string side)
+	{
+		var s = (side ?? "").Trim().ToLowerInvariant();
+		return s switch
+		{
+			"left" or "l" or "左" or "左边" or "左侧" or "左手边" => "left",
+			"right" or "r" or "右" or "右边" or "右侧" or "右手边" => "right",
+			"front" or "f" or "前" or "前面" or "前方" or "正面" or "面前" => "front",
+			"back" or "b" or "后" or "后面" or "后方" or "背后" => "back",
+			"near" or "beside" or "side" or "next" or "旁" or "旁边" or "身边" => "near",
+			_ => "",
+		};
+	}
+
+	/// <summary>目标相对本地玩家朝向的水平夹角(度):正值=右、负值=左、0=正前。</summary>
+	private static float RelativeAngleDeg(System.Numerics.Vector3 targetPos, System.Numerics.Vector3 localPos, float localRotation)
+	{
+		var dx = targetPos.X - localPos.X;
+		var dz = targetPos.Z - localPos.Z;
+		var fx = MathF.Sin(localRotation);
+		var fz = MathF.Cos(localRotation);
+		return -MathF.Atan2(dx * fz - dz * fx, dx * fx + dz * fz) * 180f / MathF.PI;
+	}
+
+	/// <summary>该座位是否在某个玩家的指定一侧(相对该玩家的面朝方向)。</summary>
+	private static bool SeatOnSide(SeatPoint seat, IGameObject player, string sideKey)
+	{
+		var deg = RelativeAngleDeg(new System.Numerics.Vector3(seat.X, seat.Y, seat.Z), player.Position, player.Rotation);
+		return sideKey switch
+		{
+			"right" => deg >= 22.5f && deg < 157.5f,
+			"left" => deg <= -22.5f && deg > -157.5f,
+			"front" => deg >= -22.5f && deg < 22.5f,
+			"back" => deg >= 157.5f || deg < -157.5f,
+			_ => true,
+		};
+	}
+
+	/// <summary>描述某座位相对某玩家的方位(如 “奥·乌儿的右侧 1米”);找不到该玩家返回空串。需框架线程。</summary>
+	public string DescribeSeatSide(SeatPoint seat, string playerName)
+	{
+		try
+		{
+			var p = FindPlayerByName(playerName);
+			if (p == null) return "";
+			return $"{playerName}的{GetLookingDirection(new System.Numerics.Vector3(seat.X, seat.Y, seat.Z), p.Position, p.Rotation)}";
+		}
+		catch { return ""; }
+	}
+
+	private SeatPoint? ResolveSeatForSittingCore(string selector, string side, out string error)
 	{
 		error = "";
 		var house = EnsureSceneState();
@@ -1048,16 +1103,21 @@ public class AuraCanAiCore : IDisposable
 			return found;
 		}
 
-		// 玩家名 → 该玩家旁边最近的空座(语义:"坐在 XX 旁边")。按清洗名精确匹配在场玩家。
+		// 玩家名 → 该玩家旁边最近的空座(语义:"坐在 XX 旁边");给了 side 则优先选那一侧的空座。按清洗名精确匹配在场玩家。
 		var player = FindPlayerByName(sel);
 		if (player != null)
 		{
 			var tid = _clientState.TerritoryType;
-			var cand = houseSeats
+			var free = houseSeats
 				.Where(s => s.TerritoryId == tid && !IsSeatOccupied(s))
 				.OrderBy(s => PlaneDist2D(player.Position, s))
-				.FirstOrDefault();
-			if (cand == null) { error = $"{sel} 旁边没有可坐的空座(当前房间的座位都有人/离太远)"; return null; }
+				.ToList();
+			if (free.Count == 0) { error = $"{sel} 旁边没有可坐的空座(当前房间的座位都有人/离太远)"; return null; }
+			var sideKey = NormalizeSide(side);
+			SeatPoint? cand = null;
+			if (sideKey.Length > 0 && sideKey != "near")
+				cand = free.FirstOrDefault(s => SeatOnSide(s, player, sideKey)); // 该侧没空座 → 退回最近空座
+			cand ??= free[0];
 			var dPlayer = PlaneDist2D(player.Position, cand);
 			if (dPlayer > 6f)
 			{
@@ -1948,14 +2008,14 @@ public class AuraCanAiCore : IDisposable
 			if (hasAction && infoCalls.Count == 0)
 			{
 				// 纯动作轮:解析并执行
-				string action = "", target = "";
-				try { var a = JObject.Parse(actionCall.args ?? "{}"); action = (a["action"]?.ToString() ?? "").Trim().ToLowerInvariant(); target = (a["target"]?.ToString() ?? "").Trim(); } catch { }
+				string action = "", target = "", side = "";
+				try { var a = JObject.Parse(actionCall.args ?? "{}"); action = (a["action"]?.ToString() ?? "").Trim().ToLowerInvariant(); target = (a["target"]?.ToString() ?? "").Trim(); side = (a["side"]?.ToString() ?? "").Trim(); } catch { }
 				if (string.IsNullOrEmpty(action))
 				{
 					if (!string.IsNullOrEmpty(content)) AppendAssistantAndEcho(content, channelNo, replyAddress);
 					return;
 				}
-				var actedDesc = ExecuteBodyAction(action, target);
+				var actedDesc = ExecuteBodyAction(action, target, side);
 				// 动作轮附带的 content 是模型的动作旁白/内心独白(实测 DeepSeek 常写英文,如
 				// "I turn and walk over to X"),违反输出规则,绝非可发送台词 → 一律丢弃不入历史,
 				// 由下方补台词轮统一产出真正台词(契约:动作绝不写进台词)。
@@ -2335,11 +2395,12 @@ public class AuraCanAiCore : IDisposable
 		}
 		var tools = new JArray
 		{
-			Func("rp_body_action", "让角色做身体动作(走近/跟随/走开/转身面向/停止移动/坐)。approach/follow/leave/face 只能对当前在场的玩家;先想清楚目标离你多远再决定动不动,拿不准用 lookup_player。sit 目标:座位名 / #id / 玩家名(坐那个玩家旁边最近的空座,如对方邀你坐身边就用玩家名)/ 空=自己最近的空座。⚠️ 对方说“让一让/挪一挪/别挡着/借过/站边上点”→ 用 leave(target=对方) 或 leave_scene(退到人少的地方),**不要用 stop**:stop 只是终止正在进行的移动,它不会让你真的让开。动作绝不写进台词。",
+			Func("rp_body_action", "让角色做身体动作(走近/跟随/走开/转身面向/停止移动/坐)。approach/follow/leave/face 只能对当前在场的玩家;先想清楚目标离你多远再决定动不动,拿不准用 lookup_player。sit:要坐到某人旁边就 target=玩家名;对方指定了左/右/前/后就用 side 参数(left/right/front/back/near)——**不要自己挑座位编号**,程序会自动找合适的空座并把“坐到了哪”告诉你。⚠️ 对方说“让一让/挪一挪/别挡着/借过/站边上点”→ 用 leave(target=对方) 或 leave_scene(退到人少的地方),**不要用 stop**:stop 只是终止正在进行的移动,它不会让你真的让开。动作绝不写进台词,也不要说出座位编号或工具/参数。",
 				new JObject
 				{
 					["action"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "approach", "follow", "leave", "face", "stop", "sit" } },
-					["target"] = new JObject { ["type"] = "string", ["description"] = "approach/follow/leave/face 填玩家名(空=最近接触的人);sit 填座位名/#id,或填玩家名=坐 TA 旁边最近的空座,空=自己最近的空座;⚠要坐某人的左边/右边:先 list_seats(near=那人) 看每个座在 TA 的哪一侧(左/右/前/后),再挑一个座位名/#id 坐" },
+					["target"] = new JObject { ["type"] = "string", ["description"] = "approach/follow/leave/face 填玩家名(空=最近接触的人);sit 填玩家名(坐 TA 旁边,可配 side)或座位名(一般不必),空=自己最近的空座" },
+					["side"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "left", "right", "front", "back", "near" }, ["description"] = "可选,仅 sit 且 target 是玩家时:坐 TA 的哪一侧(left/right/front/back/near=旁边)。不要自己挑 #编号,交给程序。" },
 				}, new[] { "action" }),
 			Func("face_player", "让角色转身看向(面向)某个在场的玩家——多人对话时,你要对谁说话、回应谁,就先 face 他;也可用于表达正在注意/看着某人。动作绝不会移动。",
 				new JObject
@@ -2419,14 +2480,14 @@ public class AuraCanAiCore : IDisposable
 	}
 
 	/// <summary>执行身体动作(框架线程调度),返回中文结果描述(供补台词请求引用);动作未知返回 null(不补台词)。</summary>
-	private string? ExecuteBodyAction(string action, string target)
+	private string? ExecuteBodyAction(string action, string target, string side = "")
 	{
 		if (action is not ("approach" or "follow" or "leave" or "face" or "stop" or "sit")) return null;
-		if (_framework.IsInFrameworkUpdateThread) return ExecuteBodyActionCore(action, target);
-		return _framework.RunOnFrameworkThread(() => ExecuteBodyActionCore(action, target)).GetAwaiter().GetResult();
+		if (_framework.IsInFrameworkUpdateThread) return ExecuteBodyActionCore(action, target, side);
+		return _framework.RunOnFrameworkThread(() => ExecuteBodyActionCore(action, target, side)).GetAwaiter().GetResult();
 	}
 
-	private string ExecuteBodyActionCore(string action, string target)
+	private string ExecuteBodyActionCore(string action, string target, string side)
 	{
 		var m = Movement;
 		var who = string.IsNullOrEmpty(target) ? "最近接触的人" : target;
@@ -2441,10 +2502,14 @@ public class AuraCanAiCore : IDisposable
 					return m.Face(target) ? $"转身面向了 {who}" : $"面向失败(找不到 {target})";
 				case "sit":
 				{
-					var sitMsg = m.SitOnSeat(target);
-					return sitMsg.Length == 0
-						? $"开始去找{(string.IsNullOrEmpty(target) ? "最近的空座" : $"座位「{target}」")}坐下"
-						: $"没法坐下:{sitMsg}";
+					var sitMsg = m.SitOnSeat(target, side);
+					if (sitMsg.Length > 0) return $"没法坐下:{sitMsg}";
+					// 座位由程序选好;只把“坐到了什么方位”告知模型(不给座位编号,避免模型念出来)
+					var seat = m.CurrentSitSeat;
+					var sideDesc = (seat != null && !string.IsNullOrEmpty(target)) ? DescribeSeatSide(seat, target) : "";
+					return sideDesc.Length > 0
+						? $"开始走到 {sideDesc} 的空座坐下"
+						: "开始走到附近一个空座坐下";
 				}
 				default:
 					// 更换动作前先停掉旧移动
@@ -2748,7 +2813,8 @@ public class AuraCanAiCore : IDisposable
 		"- 禁止描述表情、动作、心理活动;你的每一条回复都会被直接作为游戏内台词发送\\n" +
 		"- 必须使用简体中文输出台词,禁止输出英文或其他外语\\n" +
 		"- 需要调用工具(查人/查座/动作)的那一轮,除工具参数外不要输出任何文字,不要写\"我看一下…\"\"我走过去…\"之类的旁白\\n" +
-		"- 输出必须是可以直接说出口的话,不加任何修饰";
+		"- 输出必须是可以直接说出口的话,不加任何修饰" +
+		"- 禁止说出座位编号(如 #4)、工具名/参数,或“我去查/我去挑/我看一下”这类过程描述:这些是程序的事,你只输出自然的台词";
 
 	/// <summary>当前生效人设的 system 提示(人设 + 输出规则 + 自定义动作表);无人设返回 null。</summary>
 	private string? BuildPersonaSystemMessage()

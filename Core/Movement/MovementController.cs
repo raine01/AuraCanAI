@@ -181,13 +181,13 @@ public sealed class MovementController : IDisposable
 
 	/// <summary>坐到记录点:selector 空=离自己最近的可用空座;"#id"=按 id(调试);其他按名字部分匹配(如 窗边沙发)。
 	/// 返回空串=已开始;非空=失败原因(状态/占用/房间/找不到等)。</summary>
-	public string SitOnSeat(string selector)
+	public string SitOnSeat(string selector, string side = "")
 	{
 		if (_active) return "已有进行中的移动,先 /aca stop";
 		if (!_override.WalkAvailable) return $"移动不可用:{_override.UnavailableReason}";
 		var block = GetBlockReason();
 		if (block != null) return $"当前状态不能移动({block})";
-		var seat = _core.ResolveSeatForSitting(selector, out var err);
+		var seat = _core.ResolveSeatForSitting(selector, side, out var err);
 		if (seat == null) return err;
 		// 目标在别的房间/房子 → 拒绝
 		if (seat.TerritoryId != _clientState.TerritoryType)
@@ -230,6 +230,9 @@ public sealed class MovementController : IDisposable
 	{
 		if (_active) Finish(MoveOutcome.ZoneChanged, "");
 	}
+
+	/// <summary>当前正在去坐的座位(供上层把“实际坐到了哪”告知模型)。</summary>
+	public SeatPoint? CurrentSitSeat => _sitSeat;
 
 	/// <summary>当前状态文本(命令/UI/网页显示)</summary>
 	public string StatusText()
