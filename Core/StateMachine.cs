@@ -62,8 +62,8 @@ public sealed class StateMachine
 		return (true, $"已切换到「{s.name}」(人设: {role})");
 	}
 
-	/// <summary>手动强制设置为当前状态(不检查通路;调试/逃生用,如 /aca smstate 皮下)。
-	/// 因为「被当成AI」这类状态没有出口,只能从命令/网页切回去。</summary>
+	/// <summary>强制设置为当前状态(不检查通路;供“闲置回到默认状态”等程序内部使用)。
+	/// 「被当成AI」这类状态没有出口,所以需要能绕过通路直接设。</summary>
 	public (bool ok, string message) ForceSetState(string key)
 	{
 		var set = CurrentSet;
