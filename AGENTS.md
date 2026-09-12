@@ -788,3 +788,11 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
   - ⚠️ 兜底必须限定在 `truncated` 时:正常短回复(「在呢在呢,咋啦」)末尾也没句号,无条件丢会误删。
 - **lookup_player 补自身信息**:新增 `BuildSelfInfo()`(名字/种族/性别/在线状态/当前动作),在“列在场玩家”返回里追加
   `你自己:mm(敖龙族女,状态),空闲`;场景注入的 `你:` 也带上种族性别(`SelfRaceGender()`),方便回答“你什么种族”。
+
+## 拟真打字节奏(2026-09-12,用户口径)
+- 原逻辑:模型返回后立刻发第 1 条,条与条之间才等 `LineGapFor`。
+- 新逻辑:**模型返回后不急发**——每一条都先等“打这句要多久”,再发:
+  `TypingDelayFor(line) = clamp(400 + 字数*90, 600, 5000)` ms;拆条顺序 → 等→发→等→发。
+- 常量:`TypingBaseMs=400 / TypingPerCharMs=90 / TypingMinMs=600 / TypingMaxMs=5000`(原 LineGap* 已删)。
+- 日志:`LLM 台词待发(1/2,等 2380ms 打字): …` → 方便核对。
+- 总延迟 ≈ 静默 2~5s + LLM 1~2s + 逐条打字时间;`_replyBusy` 期间不接新回复(像人正在敲字)。

@@ -2691,9 +2691,14 @@ public class AuraCanAiCore : IDisposable
 	private const int LineTotalMaxChars = 50; // 一轮台词总字数上限(超出就按句末标点截断,丢掉多余的)
 	private const int LineMaxLen = 45;        // 单条尽量不超过这么多字(超出按句末标点再拆)
 	private const int LineMaxCount = 3;       // 一轮最多拆成几条(再多就并进最后一条)
-	private const int LineGapBaseMs = 350;    // 多条之间的基础间隔(毫秒)
-	private const int LineGapPerCharMs = 70;  // 每条按字数再延时(模拟打字速度)
-	private const int LineGapMaxMs = 3500;    // 间隔上限
+	private const int TypingBaseMs = 400;    // 打字基础延迟(起手/反应)
+	private const int TypingPerCharMs = 90;  // 每个字的打字时间
+	private const int TypingMinMs = 600;     // 单条最短等待
+	private const int TypingMaxMs = 5000;    // 单条最长等待
+
+	/// <summary>拟真:这一句按字数算“人要打多久”(毫秒);发之前先等这么久。</summary>
+	private static int TypingDelayFor(string line)
+		=> Math.Clamp(TypingBaseMs + (line?.Length ?? 0) * TypingPerCharMs, TypingMinMs, TypingMaxMs);
 
 	/// <summary>把一段台词按换行/句末标点拆成多条(尽量每条 ≤ LineMaxLen);
 	/// 总量超 LineTotalMaxChars 时先按句末标点截断(宁短勿长)。</summary>
@@ -2750,10 +2755,6 @@ public class AuraCanAiCore : IDisposable
 		}
 		return lines;
 	}
-
-	/// <summary>多条之间的间隔:按上一条字数模拟打字/敲字速度(基础 + 每字 N 毫秒,封顶)。</summary>
-	private static int LineGapFor(string line)
-		=> Math.Clamp(LineGapBaseMs + (line?.Length ?? 0) * LineGapPerCharMs, 500, LineGapMaxMs);
 
 	/// <summary>发送 LLM 台词:按换行/句末标点拆成多条依次发出(像真人一句句打出来);历史里只存整段一条。
 	/// 频道路由:只回对应频道,不用 /s 兜底;悄悄话回 /t。</summary>
@@ -2815,12 +2816,15 @@ public class AuraCanAiCore : IDisposable
 		{
 			var line = lines[i];
 			var payload = isTell ? $"{replyAddress} {line}" : line;
+			// 拟真:大模型返回后**不急发**,先按这句字数等“打字时间”再发(像人正在敲字)
+			var waitMs = TypingDelayFor(line);
+			Log($"LLM 台词待发({i + 1}/{lines.Count},等 {waitMs}ms 打字): {line}");
+			await Task.Delay(waitMs);
 			// ⚠️ 先登记再发:聊天回显可能在同一帧内到达,RunCommand 返回后再登记就晚了
 			//(实测历史里同一句被存 2~3 遍——模型看到自己在复读,回复变机械)
 			lock (_historyLock) _recentSelfLines.Add((line, DateTime.Now));
 			var ok = RunCommand(cmd, payload);
 			Log($"LLM 台词已发({cmd},{i + 1}/{lines.Count}): {(ok ? "成功" : "失败(未登录等)")} | {line}");
-			if (i < lines.Count - 1) await Task.Delay(LineGapFor(line)); // 按字数模拟打字速度
 		}
 	}
 
