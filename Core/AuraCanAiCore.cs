@@ -1984,6 +1984,17 @@ public class AuraCanAiCore : IDisposable
 					: RunInfoTool(c.name, c.args ?? "{}");
 				msgs.Add(new JObject { ["role"] = "tool", ["tool_call_id"] = c.id, ["content"] = ans });
 			}
+			// 状态切换(switch_mood/switch_scene)可能换了人设 → 同步刷新本轮的 persona system,
+			// 否则本轮仍按旧人设回复(用户实测:要求「上皮」后仍以皮下口吻拒绝)
+			if (infoCalls.Any(c => c.name is "switch_mood" or "switch_scene"))
+			{
+				var persona = BuildPersonaSystemMessage();
+				if (persona != null && msgs.Count > 0 && msgs[0]["role"]?.ToString() == "system")
+				{
+					msgs[0]["content"] = persona;
+					Log("状态切换后人设已刷新(本轮按新状态回应)");
+				}
+			}
 		}
 	}
 
@@ -2358,7 +2369,7 @@ public class AuraCanAiCore : IDisposable
 			if (moods.Count > 0)
 			{
 				tools.Add(Func("switch_mood",
-					"切换你的角色状态/心情(状态机第一层)。当处境或心情变了(被冷落、受伤、开心、亢奋、疲惫…)时用;可自由选择。可用状态: " + string.Join(" / ", moods.Select(m => m.name)),
+					"切换你的角色状态/身份(状态机第一层)。处境/身份/心情变了就用它(如对方要你角色扮演/上皮，或要你出戏/皮下，情绪变化…);以各状态说明为准,别人要求时不要拒绝直接切。可用状态: " + string.Join(" / ", moods.Select(m => m.name)),
 					new JObject { ["mood"] = new JObject { ["type"] = "string", ["enum"] = new JArray(moods.Select(m => JToken.FromObject(m.name)).ToArray()) } }, new[] { "mood" }));
 			}
 			var allowed = State.AllowedScenes();
@@ -2720,22 +2731,27 @@ public class AuraCanAiCore : IDisposable
 		"- 需要调用工具(查人/查座/动作)的那一轮,除工具参数外不要输出任何文字,不要写\"我看一下…\"\"我走过去…\"之类的旁白\\n" +
 		"- 输出必须是可以直接说出口的话,不加任何修饰";
 
+	/// <summary>当前生效人设的 system 提示(人设 + 输出规则 + 自定义动作表);无人设返回 null。</summary>
+	private string? BuildPersonaSystemMessage()
+	{
+		var role = GetLLMRole(GetActiveRoleName());
+		if (string.IsNullOrEmpty(role.setting)) return null;
+		var sys = Regex.Replace(role.setting.Replace("\n", "\\n"), "[\u0000-\u001F]", " ");
+		// 追加输出硬规则:所有角色统一生效,防止模型输出动作描写
+		sys += "\\n" + OutputFormatRule;
+		// 追加角色自定义动作列表(AI 可主动执行;内容随角色走)
+		var actRule = BuildRoleActionRule(role);
+		if (actRule.Length > 0) sys += "\\n" + actRule;
+		return sys;
+	}
+
 	private void ResetChatHistory()
 	{
 		lock (_historyLock)
 		{
 			_chatHistory.Clear();
-			var role = GetLLMRole(GetActiveRoleName());
-			if (!string.IsNullOrEmpty(role.setting))
-			{
-				var sys = Regex.Replace(role.setting.Replace("\n", "\\n"), "[\u0000-\u001F]", " ");
-				// 追加输出硬规则:所有角色统一生效,防止模型输出动作描写
-				sys += "\\n" + OutputFormatRule;
-				// 追加角色自定义动作列表(AI 可主动执行;内容随角色走)
-				var actRule = BuildRoleActionRule(role);
-				if (actRule.Length > 0) sys += "\\n" + actRule;
-				_chatHistory.Add(new Message { content = sys, role = "system" });
-			}
+			var sys = BuildPersonaSystemMessage();
+			if (sys != null) _chatHistory.Add(new Message { content = sys, role = "system" });
 		}
 	}
 

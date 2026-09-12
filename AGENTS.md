@@ -600,3 +600,12 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - `EnsureStateMachineState` 的套名改名规则扩为:单套且名为「默认」**或「状态机1」** → 改名「白屿涟音」(之前只改「默认」,迁移来的「状态机1」漏了)。
 - 新增 `/aca smreset`(`AuraCanAiCore.ResetStateMachine()`):把状态机重置为默认示例(单套「白屿涟音」= 皮下/皮上);命令帮助串已加。
 - 已直接修好用户配置里的套名(仅改 name,未动 moods)。
+
+## 「不自动上皮」修复(2026-09-12,用户看日志发现)
+- 现象:用户说「陪我磨磨皮?」「就是上皮陪我角色扮演一下」,模型全程不调 `switch_mood`,还以皮下口吻拒绝。
+- 根因:①`DescribeStateForAi` 的切换指引只举了「开心/受伤/被冷落」这类**情绪**例子,没告诉模型「处境/身份」也包括“被要求上皮/出戏”,模型无法把“上皮”映射到 switch_mood;②皮下人设本身写着“不演角色”,没人纠正就顺着拒绝;③即使切了,本轮请求已经带着旧人设的 system,回复仍是旧口吻。
+- 修复:
+  1. `StateMachine.DescribeStateForAi` 用法段重写:明说“处境/身份/心情变了就切;‘变了’以各状态 desc 为准(含角色扮演/上皮 vs 皮下/出戏);**别人要求切身份/进入角色/出戏时不要拒绝、不要反问,直接调工具切过去**”。
+  2. `switch_mood` 工具描述同步(加上“别人要求时不要拒绝直接切”)。
+  3. `AuraCanAiCore.BuildPersonaSystemMessage()` 抽出(ResetChatHistory 复用);`ProcessBodyReplyAsync` 工具轮里若出现 `switch_mood`/`switch_scene`,把 `msgs[0]`(persona system)**就地换成新人设**,使**本轮**即按新状态回应(日志「状态切换后人设已刷新」)。
+- ⚠️ 同轮限制:工具枚举是请求时生成的,所以“要求上皮”的那一轮 `switch_scene` 枚举还是旧状态的情景;要切情景/顶阶情景需下一轮(模型会看到新枚举)。
