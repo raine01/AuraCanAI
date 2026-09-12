@@ -95,6 +95,7 @@
 											<button type="button" class="btn btn-primary btn-sm me-2" id="addRoleBtn">
 												<i class="fas fa-plus me-1"></i>新增角色
 											</button>
+											<button type="submit" class="btn btn-sm btn-success" id="saveConfigBtn">保存角色设定</button>
 										</div>
 									</div>
 									<div id="rolesContainer">
@@ -104,18 +105,11 @@
 						</div>
 					</div>
 
-					<!-- 保存/还原:只作用于本节的「角色设定」(场景设定是即时自动保存的,不走这个按钮) -->
-					<div class="save-btn-container text-center">
-						<button type="submit" class="btn btn-success btn-lg save-btn" id="saveConfigBtn">
-							<i class="fas fa-save mr-2"></i>保存角色设定
+					<div class="text-center mb-3">
+						<button type="button" class="btn btn-warning" id="resetConfigBtn">
+							<i class="fas fa-undo mr-2"></i>还原默认角色设定与状态机
 						</button>
-					</div>
-
-					<div class="reset-btn-container text-center mb-3">
-						<button type="button" class="btn btn-warning btn-lg" id="resetConfigBtn">
-							<i class="fas fa-undo mr-2"></i>还原默认角色设定
-						</button>
-						<small class="d-block text-muted mt-2">只重置角色相关配置(当前角色、自定义角色与动作列表),恢复为默认角色「白屿涟音」;DeepSeek Key 保留。场景设定 / 消息设置 / 行为设置 / 玩家备注 / 歌单都不会动。</small>
+						<small class="d-block text-muted mt-2">把<b>角色设定</b>(当前角色、自定义角色与动作列表)和<b>状态机</b>(所有状态机套)一起还原为默认;DeepSeek Key 保留。「启用状态机」开关 / 场景设定 / 消息设置 / 行为设置 / 玩家备注 / 歌单都不会动。</small>
 					</div>
 				</section>
 
@@ -168,7 +162,7 @@
 			});
 
 			$('#resetConfigBtn').click(function() {
-				if (confirm('确定要把角色设定恢复为默认吗？\n\n会删除你自定义的全部角色(含每个角色的动作列表)，只保留默认角色「白屿涟音」；DeepSeek Key 保留。\n场景设定 / 消息设置 / 行为设置 / 玩家备注 / 歌单不会受影响。')) {
+				if (confirm('确定要还原为默认吗？\n\n会把【角色设定】(全部自定义角色与动作列表)和【状态机】(所有状态机套)一起重置为默认;DeepSeek Key 保留。\n「启用状态机」开关 / 场景设定 / 消息设置 / 行为设置 / 玩家备注 / 歌单不会受影响。')) {
 					resetConfigToDefault();
 				}
 			});
@@ -496,6 +490,7 @@
 			try {
 				currentDeepseekKey = config.deepseekKey || '';
 				allRoles = config.roles || [];
+				$('#rolesContainer').empty(); // 重新加载时清空,避免残留/重复
 
 				const roleSelect = $('#currentRole');
 				roleSelect.empty().append('<option value="">-- 请选择角色 --</option>');
@@ -551,12 +546,14 @@
 		function resetConfigToDefault() {
 			$('#loadingOverlay').removeClass('hidden');
 			$.ajax({
-				url: '/DeleteLLMConfig',
+				url: '/ResetRolesAndStateMachine',
 				type: 'POST',
 				success: function(response) {
 					$('#loadingOverlay').addClass('hidden');
-					showAlert('角色设定已恢复默认(DeepSeek Key 保留)', 'success');
+					showAlert('角色设定与状态机已还原为默认(DeepSeek Key 保留)', 'success');
+					allRoles = []; smSelSet = 0; smSelMood = 0; smSelScene = 0;
 					loadConfigFromServer();
+					loadStateMachine();
 				},
 				error: function(xhr, status, error) {
 					$('#loadingOverlay').addClass('hidden');

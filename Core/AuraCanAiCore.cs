@@ -3383,6 +3383,25 @@ public class AuraCanAiCore : IDisposable
 		catch (Exception e) { return new { message = e.Message, result = "error" }; }
 	}
 
+	/// <summary>还原:默认角色设定 + 默认状态机(前端「还原默认角色设定与状态机」按钮)。DeepSeek Key 保留;
+	/// 「启用状态机」开关不动。</summary>
+	public object ResetRolesAndStateMachineJson(string _)
+	{
+		_llmSetting = Defaults.DefaultLlmConfig();
+		SyncApiKeyFromConfig(); // Key 保留
+		_config.SetLlmConfig(StripKey(_llmSetting));
+		_config.SmSets = new List<SmSet> { new() { id = 1, name = "白屿涟音", moods = Defaults.DefaultStateMachine() } };
+		_config.SmCurrentSetId = 1;
+		_config.SmCurrentMoodId = _config.SmSets[0].moods[0].id;
+		_config.SmCurrentSceneId = _config.SmSets[0].moods[0].scenes[0].id;
+		_config.Save(_pi);
+		RoleActions?.Reset();
+		State?.ResetIdle();
+		ResetChatHistory();
+		Log("[角色/状态机] 已还原为默认(角色设定 + 全部状态机)");
+		return new { message = "已还原默认角色设定与状态机(DeepSeek Key 保留)", result = "success" };
+	}
+
 	/// <summary>DeepSeek API Key 独立存储(Configuration.DeepSeekApiKey),同步到运行时 LLM 配置。</summary>
 	private void SyncApiKeyFromConfig() => _llmSetting.deepseekKey = _config.DeepSeekApiKey ?? "";
 

@@ -275,11 +275,12 @@ XivChatType 十六进制两位 = 频道号:0A=说话 /s、0E=小队 /p、18=部�
 
 | 页面 | 按钮 | 接口 | 重置什么 |
 |---|---|---|---|
-| 角色设定(character.html) | 保存角色设定 / **还原默认角色设定** | POST `/SaveLLMConfig` / `/DeleteLLMConfig` | 只重置 `Configuration.LlmConfigJson`:`currentRole`→空(不使用人设,AI 不回话)、`roles`→只剩默认「白屿涟音」(含 `actions` 动作列表一起丢)。副作用:`ResetChatHistory()` + `RoleActions.Reset()`。**DeepSeek Key 保留**(独立字段 `Configuration.DeepSeekApiKey`) |
+| 角色设定(character.html) | 保存角色设定 / **还原默认角色设定与状态机** | POST `/SaveLLMConfig` / **`/ResetRolesAndStateMachine`** | 重置 `Configuration.LlmConfigJson`(`currentRole`→空、`roles`→默认「白屿涟音」+「皮下」) **以及全部状态机** `SmSets`(→单套「白屿涟音」= 皮下/皮上)。副作用:`ResetChatHistory()` + `RoleActions.Reset()` + `State.ResetIdle()`。**DeepSeek Key 保留**;「启用状态机」开关不动 |
 | 消息设置(setting.html) | 保存所有配置 / 还原默认配置 | POST `/SaveConfig` / `/DeleteConfig` | 只重置 `Configuration.MessageSettingsJson`:`privacyMode`、`keywords`、`blockwords`、`defaultFilePath`(→./chatlogs)、`logPeriod`(→每天)、`weekStartDay`(→周一)、`channelConfig`(→默认频道表,播读/记录/AI 采集开关全回默认)。运行时 `_msgSetting` 直接替换 → 即时生效 |
 
 - 两个「还原」互不影响:**不重置** 场景设定(Seats/Obstacles/Houses)、行为设置(Behaviors)、玩家备注(PlayerNotes)、歌单(Playlists)、TTS(开关/音量/语速/并发)、网页端口、LLM 回复节奏、移动参数、DeepSeek Key。
-- 场景设定是**编辑即自动保存**(saveHouses/saveSeats/saveObstacles 各自单独接口),不走页面的保存按钮——所以 character.html 的保存按钮只对「角色设定」有效,已更名为「保存角色设定」并移入角色设定节内。
+- 场景设定是**编辑即自动保存**(saveHouses/saveSeats/saveObstacles 各自单独接口),不走页面的保存按钮——所以 character.html 的保存按钮只对「角色设定」有效(已改为与状态机同款的小绿按钮「保存角色设定」,放在「角色管理」标题行;旧的大号 sticky 保存条已删)。
+- 新增 `POST /ResetRolesAndStateMachine` = 角色设定 + 全部状态机一起还原;旧 `/DeleteLLMConfig` 保留(只重置角色)。
 
 ## 小队解散清理 + AI「离开」(2026-09-11 用户口径,已实现待实机验证)
 

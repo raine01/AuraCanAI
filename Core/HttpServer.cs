@@ -53,6 +53,7 @@ public class HttpServer : IDisposable
 		_methods["GetLLMConfig"] = _ => _core.GetLlmConfigJson();
 		_methods["SaveLLMConfig"] = _core.SaveLlmConfigJson;
 		_methods["DeleteLLMConfig"] = _core.DeleteLlmConfigJson;
+		_methods["ResetRolesAndStateMachine"] = _core.ResetRolesAndStateMachineJson;
 		_methods["GetChats"] = _core.GetChatsJson;
 		_methods["SendMessage"] = _core.SendMessageJson;
 		_methods["SendTell"] = _core.SendTellJson;
