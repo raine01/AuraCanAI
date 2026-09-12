@@ -2,6 +2,14 @@ using Newtonsoft.Json;
 
 namespace AuraCanAI.Dalamud.Core;
 
+/// <summary>角色扮演状态限制(条目级;默认不做限制)。「角色扮演中」= 前端网页「角色设定」已选中当前角色(currentRole 非空),与游戏 OnlineStatus 无关。</summary>
+public enum BehaviorRpMode
+{
+	NoLimit = 0, // 不做限制(默认)
+	RpOnly = 1, // 仅角色扮演时触发(未选当前角色时丢弃)
+	RpSkip = 2, // 角色扮演时不触发(已选当前角色时丢弃)
+}
+
 /// <summary>行为设置:一个列表条目(持久化到配置)。序号 id 在列表中唯一,自动分配(删除后复用最小空缺)。
 /// 用 public 字段以便 ImGui ref 绑定;Json.NET 不默认序列化字段,故每个字段加 [JsonProperty]。</summary>
 public class BehaviorItem
@@ -12,6 +20,7 @@ public class BehaviorItem
 	[JsonProperty] public bool skipOnLeave = true; // 离开时不触发(我的在线状态为「离开」时不触发,默认勾选)
 	[JsonProperty] public bool skipOnCombat = true; // 战斗中不触发(战斗状态时不触发,默认勾选)
 	[JsonProperty] public bool chatNotice = false; // 聊天内提示(触发时在聊天栏 /e 提示)
+	[JsonProperty] public BehaviorRpMode rpMode = BehaviorRpMode.NoLimit; // 角色扮演限制(仅RP时/RP时不触发/不做限制,默认不做限制;按前端是否选了当前角色判断)
 	[JsonProperty] public string definition = ""; // 行为定义文本(多行;半角分号 ; 分割多段=多条规则)
 }
 
@@ -85,6 +94,7 @@ public class BehaviorRule
 	public bool ChatNotice; // 条目聊天提示快照
 	public bool SkipOnLeave; // 条目「离开时不触发」快照(我的在线状态为「离开」时不触发)
 	public bool SkipOnCombat; // 条目「战斗中不触发」快照(战斗状态时不触发)
+	public BehaviorRpMode RpMode = BehaviorRpMode.NoLimit; // 条目角色扮演限制快照(默认不做限制)
 	public BehaviorActionType ActionType = BehaviorActionType.Trigger;
 	public List<MacroSpec> Macros = new(); // Trigger:宏列表(trigger 1,2,3 逐个执行;单宏 = 原 trigger N)
 	public string SayChannel = ""; // Say:频道简写(如 p/sh/y/t,见 BehaviorSyntaxDoc.SayChannels)

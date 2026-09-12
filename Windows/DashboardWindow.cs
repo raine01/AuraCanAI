@@ -636,6 +636,7 @@ public class DashboardWindow : Window, IDisposable
 				chatNotice = item.chatNotice,
 				skipOnLeave = item.skipOnLeave,
 				skipOnCombat = item.skipOnCombat,
+				rpMode = item.rpMode,
 				definition = item.definition,
 			};
 		_behavError = "";
@@ -643,7 +644,7 @@ public class DashboardWindow : Window, IDisposable
 		_behavAiDesc = "";
 	}
 
-	/// <summary>绘制内联编辑区:注释 + 定义文本(多行) + 聊天内提示 + 保存/删除/取消(保存失败红字)</summary>
+	/// <summary>绘制内联编辑区:注释 + 定义文本(多行) + 离开/战斗/聊天提示勾选 + 角色扮演限制 + 保存/删除/取消(保存失败红字)</summary>
 	private void DrawBehaviorEditor(AuraCanAiCore core)
 	{
 		ImGui.TextColored(new Vector4(0.4f, 0.8f, 1f, 1), _behavIsNew ? "新增行为" : $"编辑行为 #{_behavEditing!.id}");
@@ -662,6 +663,19 @@ public class DashboardWindow : Window, IDisposable
 		ImGui.Checkbox("离开时不触发", ref _behavEditing.skipOnLeave);
 		ImGui.Checkbox("战斗中不触发", ref _behavEditing.skipOnCombat);
 		ImGui.Checkbox("聊天内提示(触发时在聊天栏 /e 提示)", ref _behavEditing.chatNotice);
+
+		// 角色扮演限制:仅RP时触发 / RP时不触发 / 不做限制(按前端「角色设定」是否选了当前角色判断)
+		ImGui.SetNextItemWidth(200);
+		var rpNames = new[] { "仅角色扮演时触发", "角色扮演时不触发", "不做限制" };
+		var rpIdx = _behavEditing.rpMode switch
+		{
+			BehaviorRpMode.RpOnly => 0,
+			BehaviorRpMode.RpSkip => 1,
+			_ => 2,
+		};
+		if (ImGui.Combo("角色扮演限制", ref rpIdx, rpNames, rpNames.Length))
+			_behavEditing.rpMode = rpIdx switch { 0 => BehaviorRpMode.RpOnly, 1 => BehaviorRpMode.RpSkip, _ => BehaviorRpMode.NoLimit };
+		ImGui.TextDisabled("  按网页「角色设定」是否选中当前角色判断(默认不做限制)");
 
 		if (_behavError.Length > 0)
 		{
@@ -700,7 +714,7 @@ public class DashboardWindow : Window, IDisposable
 		var def = (_behavEditing?.definition ?? "").Trim();
 		if (def.Length == 0) return "定义不能为空";
 
-		var parsed = BehaviorParser.Parse(def, _behavEditing!.id, _behavEditing.comment, _behavEditing.chatNotice, _behavEditing.skipOnLeave, _behavEditing.skipOnCombat);
+		var parsed = BehaviorParser.Parse(def, _behavEditing!.id, _behavEditing.comment, _behavEditing.chatNotice, _behavEditing.skipOnLeave, _behavEditing.skipOnCombat, _behavEditing.rpMode);
 		if (parsed.Errors.Count > 0)
 		{
 			var err = string.Join("\n", parsed.Errors);

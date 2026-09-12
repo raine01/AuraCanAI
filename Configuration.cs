@@ -46,6 +46,13 @@ public class Configuration : IPluginConfiguration
 	public List<House> Houses { get; set; } = new(); // 房子分组(场景设定页签;座位归属)
 	public int CurrentHouseId { get; set; } // 当前选定的房子(记录前手动选择;0=未选)
 
+	// ===== 状态机(两层:第一层角色状态 / 第二层情景;2026-09 新增) =====
+	// 独立开关(手动开启才进入角色扮演/状态机);关闭时回退旧行为(用 LLM 配置里的「当前角色」)
+	public bool StateMachineEnabled { get; set; } = false;
+	public int SmCurrentMoodId { get; set; } // 当前第一层(角色状态)
+	public int SmCurrentSceneId { get; set; } // 当前第二层(情景)
+	public List<SmMood> SmMoods { get; set; } = new(); // 第一层列表(含各自的情景)
+
 	// 以下两个字段对应原 Triggernometry 持久化变量 "AuraCanAI" / "AuraCanAI_LLM"
 	[JsonProperty] public string? MessageSettingsJson { get; set; }
 	[JsonProperty] public string? LlmConfigJson { get; set; }

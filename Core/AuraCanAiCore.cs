@@ -40,6 +40,8 @@ public class AuraCanAiCore : IDisposable
 	public HttpServer? Http { get; private set; }
 	public BehaviorEngine Behaviors { get; private set; } = null!; // 行为设置引擎(宏触发自动化)
 	public PlaylistPlayer Playlist { get; private set; } = null!; // 歌单播放引擎(MIDI 播放)
+	public RoleActionPlayer RoleActions { get; private set; } = null!; // 角色自定义动作执行器(AI 主动执行动作)
+	public StateMachine State { get; private set; } = null!; // 两层状态机(第一层角色状态 / 第二层情景 + 待机动作轮换)
 	public MovementController Movement { get; private set; } = null!; // 移动控制器(自动走近/跟随/走开/到点,Phase 1)
 	private readonly MovementOverride _movementOverride; // 移动输入 hook(底层;与 Movement 同生命周期)
 
@@ -82,8 +84,17 @@ public class AuraCanAiCore : IDisposable
 	private string _lastTriggerAddr = ""; // 最近触发消息的回复地址(悄悄话 /t 用)
 	private string _lastSpeakChannel = ""; // 最近一次普通文本频道(说话/小队/等,非动作类;1C/1D 触发回复时跟随它)
 	private string _lastSpeakAddr = ""; // 最近普通文本频道对应的回复地址
-	private string _lastLlmEchoContent = ""; // 最近一次实际发出的 LLM 台词(自身回显去重)
+	private string _lastLlmEchoContent = ""; // 最近一次实际发出的 LLM 台词(自身回显去重:否则历史里每条 assistant 会存两遍)
 	private DateTime _lastLlmEchoAt = DateTime.MinValue;
+	// 对方的原创/情感动作(1C/1D):不进聊天历史,只作为「只存在一轮的现场提示」注入下一次请求(用户口径)
+	private readonly List<(string Text, DateTime At)> _pendingActionHints = new();
+	// 一次性系统事件提示(如加入/退出小队):下一轮请求注入一次即清空(与动作提示同 TTL)
+	private readonly List<(string Text, DateTime At)> _pendingSystemHints = new();
+	private const double ActionHintTtlSec = 20; // 现场提示最长存活秒数(超过就丢掉,不让旧动作跑到很久以后的对话里)
+	// 小队解散清理 + 「离开」(AI 主动退场)
+	private bool _wasInParty; // 上次检测时是否在小队(用于检测解散/退出小队)
+	private bool _leaveArmed; // 「离开」已激活:等静默到时间自动退队
+	private DateTime _leaveLastChatAt; // 最近一次「别人」发言时间(退队倒计时基准)
 
 	/// <summary>不允许 LLM 采集的频道(前端已禁勾,后端兜底强制忽略):跨服贝(25/65-6B)、部队(18)、新人(1B)。</summary>
 	private static readonly HashSet<string> NoLlmChannels = new()
@@ -119,6 +130,7 @@ public class AuraCanAiCore : IDisposable
 		EnsureValidCurrentRole();
 
 		Tts = new TtsService(config.TtsWorkers) { Enabled = config.TtsEnabled, Volume = config.TtsVolume, Rate = config.TtsRate };
+		State = new StateMachine(this, config); // 状态机(在 BehaviorEngine/ResetChatHistory 之前建,IsRolePlaying 依赖它)
 
 		_playerName = _playerState.CharacterName;
 		_playerId = _playerState.EntityId.ToString("X");
@@ -129,13 +141,14 @@ public class AuraCanAiCore : IDisposable
 		_clientState.Login += OnLogin;
 
 		// 定时器:500ms 注视检测 + 玩家进出 + 行为求值,2000ms 入场播报(回调切回游戏主线程访问 ObjectTable)
-		_timer500 = new Timer(_ => _framework.RunOnFrameworkThread(() => SafeTick(() => { CheckLookingAndPlayers(); Behaviors?.Tick(); ReplyTick(); })), null, 0, 500);
+		_timer500 = new Timer(_ => _framework.RunOnFrameworkThread(() => SafeTick(() => { CheckLookingAndPlayers(); Behaviors?.Tick(); RoleActions?.Tick(); State?.Tick(); CheckPartyStateTick(); CheckLeavePartyTick(); ReplyTick(); })), null, 0, 500);
 		_timer2000 = new Timer(_ => _framework.RunOnFrameworkThread(() => SafeTick(CheckNewPlayers)), null, 2000, 2000);
 
 		// 行为设置引擎:从配置编译规则(UI 增删改后重新 Reload)
 		Behaviors = new BehaviorEngine(this);
 		Behaviors.Reload();
 		Playlist = new PlaylistPlayer(this);
+		RoleActions = new RoleActionPlayer(this);
 
 		// 移动(Phase 1):输入 hook + 控制器。签名缺失时自动降级为不可用(不崩插件),movediag 可查。
 		_movementOverride = new MovementOverride(sigScanner, hookProvider, gameConfig, objectTable, log);
@@ -328,6 +341,7 @@ public class AuraCanAiCore : IDisposable
 						|| channelNo == "0C";
 
 			ChatVoiceHandler(channelNo, cleanName, text, isOwn);
+			if (!isOwn) _leaveLastChatAt = DateTime.Now; // 「离开」倒计时:别的任何人说话都重置(自己的话不算)
 			ChatLLMHandler(channelNo, cleanName, text, isOwn, replyAddress);
 			ChatWsHandler(channelNo, cleanName, text, isOwn, replyAddress);
 			// 最近接触用户:悄悄话(0C 我方发出 / 0D 收到,Sender 即对方)
@@ -372,7 +386,9 @@ public class AuraCanAiCore : IDisposable
 	}
 
 	/// <summary>LLM 采集 + 回复。文本类频道(说话/悄悄话/小队等):进历史并触发回复(回复跟随来源频道);
-	/// 情感动作/原创动作(1C/1D):进历史,若有最近普通文本频道可跟随则触发一次回复(回应动作),否则仅作上下文。
+	/// 情感动作/原创动作(1C/1D):**不进历史**(自 2026-09-11 用户口径)——他人的动作存成「只存在一轮的现场提示」
+	/// (下次请求注入一次,见 NotifyActionHint/TakePendingActionHints),有可跟随的普通文本频道时触发一次回应;
+	/// 自己的动作直接丢弃(不入历史、不回显)。
 	/// 限制:跨服贝/部队/新人(NoLlmChannels)不采集;小队频道只采本队成员。
 	/// replyAddress = 对方回复地址(名字@服务器),悄悄话 0D 回复时用。</summary>
 	private void ChatLLMHandler(string channelNo, string cleanName, string text, bool isOwn, string replyAddress)
@@ -388,46 +404,40 @@ public class AuraCanAiCore : IDisposable
 		}
 		if (isOwn) // 自己发言
 		{
-			// 去重:刚由 LLM 发出的原创/情感动作会由聊天事件捕获回来(own 1C/1D),跳过避免历史重复
-			if ((DateTime.Now - _lastLlmEchoAt).TotalSeconds <= 25 && text == _lastLlmEchoContent)
+			// 自身原创/情感动作(1C/1D)一律不进历史:⚠️ 原来把自身动作以 "(动作)" 形式当 assistant 台词入库,
+			// 模型会照猫画虎在台词里写括号动作(2026-09-11 用户实测),且自身动作对模型没有信息量。
+			if (channelNo is "1C" or "1D")
 			{
-				Log($"LLM 动作自身回显已跳过(历史去重): {text}");
+				Log($"LLM 自身动作已忽略(不入历史): {channelNo} {text}");
 				return;
 			}
-			if (channelNo == "1C") SendMsg($"({text})", "assistant");
-			else if (channelNo == "1D") SendMsg($"({text.Replace(cleanName, "")})", "assistant");
-			else SendMsg(text, "assistant");
+			// 自身回显去重:台词发出后会被聊天事件捕回来,不去重则历史里每条 assistant 都会存两遍
+			// (2026-09-11 实测:BODYREQ 里 assistant 成对重复,模型看到自己在复读)
+			if ((DateTime.Now - _lastLlmEchoAt).TotalSeconds <= 25 && text == _lastLlmEchoContent)
+			{
+				Log($"LLM 自身回显已跳过(历史去重): {text}");
+				return;
+			}
+			SendMsg(text, "assistant");
 		}
 		else // 他人发言
 		{
 			// 记录最近普通文本频道(说话/悄悄话/小队等,能回话的),供动作(1C/1D)触发回复时跟随
 			// —— 用户口径:动作/表情也该有回应,台词发到最近一次普通聊天频道(说话范围只限已勾采集的频道)
-			string hist;
 			bool isAction = channelNo == "1C" || channelNo == "1D";
-			if (channelNo == "1C") hist = $"[{DateTime.Now:yyyy-MM-dd HH:mm}]({cleanName}{text})"; // 原创动作文本无主语,补发言人
-			else if (channelNo == "1D")
-			{
-				// 情感动作文本通常已含“谁对谁做了什么”;保险起见不含名字时补发言人
-				hist = text.Contains(cleanName)
-					? $"[{DateTime.Now:yyyy-MM-dd HH:mm}]({text})"
-					: $"[{DateTime.Now:yyyy-MM-dd HH:mm}]({cleanName}:{text})";
-			}
-			else { hist = $"[{DateTime.Now:yyyy-MM-dd HH:mm}]{cleanName}:{text}"; }
-
 			if (isAction)
 			{
-				// 动作类:有可跟随的普通频道 → 进历史并触发回复(回应动作);没有 → 仅进历史作上下文
-				if (_lastSpeakChannel.Length > 0)
-					SendMsg(hist, "user", _lastSpeakChannel, _lastSpeakAddr, true);
-				else
-					SendMsg(hist, "user", "", "", false); // 尚无普通文本可回(用户还没说过话/没开采集)→ 只作上下文
+				// 动作类:**不进聊天历史**(会把台词风格带歪、且白占上下文),改成「只存在一轮的现场提示」,见 NotifyActionHint
+				var hint = channelNo == "1C"
+					? $"{cleanName}{text}" // 原创动作文本无主语,补发言人
+					: text; // 情感动作文本通常已含「谁对谁做了什么」
+				NotifyActionHint((channelNo == "1C" ? "原创动作" : "情感动作") + ":" + hint + $"(来自 {cleanName})");
+				return;
 			}
-			else
-			{
-				_lastSpeakChannel = channelNo; // 更新最近普通文本频道(只有 llm 采集开启的频道会走到这)
-				_lastSpeakAddr = replyAddress;
-				SendMsg(hist, "user", channelNo, replyAddress, true);
-			}
+
+			_lastSpeakChannel = channelNo; // 更新最近普通文本频道(只有 llm 采集开启的频道会走到这)
+			_lastSpeakAddr = replyAddress;
+			SendMsg($"[{DateTime.Now:yyyy-MM-dd HH:mm}]{cleanName}:{text}", "user", channelNo, replyAddress, true);
 		}
 	}
 
@@ -1116,6 +1126,29 @@ public class AuraCanAiCore : IDisposable
 		return false;
 	}
 
+	/// <summary>移开目光:清空游戏选中目标与软目标(不面向任何人,也不看自己)。供「离开」在走开前调用。
+	/// 游戏在站定时会让角色面向当前目标,所以清空目标 = 目光移开。需框架线程(内部已编组)。</summary>
+	public bool ClearLook()
+	{
+		try
+		{
+			if (_framework.IsInFrameworkUpdateThread) return ClearLookCore();
+			return _framework.RunOnFrameworkThread(ClearLookCore).GetAwaiter().GetResult();
+		}
+		catch (Exception e) { LogErr($"移开目光失败: {e.Message}"); return false; }
+	}
+
+	private bool ClearLookCore()
+	{
+		try
+		{
+			Plugin.TargetManager.Target = null;
+			Plugin.TargetManager.SoftTarget = null; // 软目标也清(软目标同样会让角色转过去看)
+			return true;
+		}
+		catch (Exception e) { LogErr($"移开目光异常: {e.Message}"); return false; }
+	}
+
 	/// <summary>触发"坐法":优先执行配置的游戏宏(SeatSitMacro 0-99),否则执行 SeatSitCommand 指令。返回是否触发成功。</summary>
 	public bool ExecuteSitMethod()
 	{
@@ -1313,6 +1346,41 @@ public class AuraCanAiCore : IDisposable
 	/// <summary>最近入场用户(清洗名;新玩家进入附近列表时更新)</summary>
 	public string GetLastEnterUser() => _lastEnterUser;
 
+	/// <summary>当前角色的自定义动作列表(与角色绑定;未选角色/无列表返回空表)。</summary>
+	public List<RoleAction> GetRoleActions(string roleName)
+	{
+		try { return GetLLMRole(roleName).actions ?? new List<RoleAction>(); }
+		catch { return new List<RoleAction>(); }
+	}
+
+	/// <summary>当前选中角色名(前端「当前角色」;未选返回空串)</summary>
+	public string GetCurrentRoleName() => GetActiveRoleName();
+
+	/// <summary>系统提示里的「自定义动作」段(列表为空返回空串;供 rp_emote 工具配合使用)。</summary>
+	private static string BuildRoleActionRule(Role role)
+	{
+		var actions = role.actions ?? new List<RoleAction>();
+		if (actions.Count == 0) return "";
+		var sb = new System.Text.StringBuilder();
+		sb.Append("## 自定义动作(你可以主动做)\n");
+		sb.Append("下表是你专属的动作(每个动作 = 播放游戏表情 + 在聊天栏显示对应文字),想做动作时调用 rp_emote(name=动作名称):\n");
+		foreach (var a in actions)
+		{
+			var detail = new List<string>();
+			if (!string.IsNullOrWhiteSpace(a.emote)) detail.Add($"表情:{a.emote.Trim()}");
+			if (!string.IsNullOrWhiteSpace(a.text)) detail.Add($"文字:{a.text.Trim()}");
+			if (a.cooldown > 0) detail.Add($"冷却:{a.cooldown}秒");
+			sb.Append($"- {RoleActionPlayer.DisplayName(a)}" + (detail.Count > 0 ? $"({string.Join(";", detail)})" : "") + "\n");
+		}
+		sb.Append("用法:" +
+			"(1) 动作是「做的事」,不要写进台词;" +
+			"(2) 同一动作有冷却,冷却中会被告知剩余秒数,此时不要重复调用,换个动作或直接说话;" +
+			"(3) 做动作与说话可以同一回合进行,也可只做动作;" +
+			"(4) 动作要符合角色性格与当前情境,不要为了做动作而做;" +
+			"(5) 动作与台词彻底分开:不要用「(动作)」「*神态*」这类括号描写代替工具调用(会被程序直接删掉,写了等于白写)。");
+		return sb.ToString();
+	}
+
 	/// <summary>是否刚有玩家进入附近(行为条件 anyone_enter;最近 3 秒内发生入场事件)</summary>
 	public bool AnyPlayerEnteredRecently() => (DateTime.Now - _lastEnterTime).TotalSeconds <= 3;
 
@@ -1365,6 +1433,9 @@ public class AuraCanAiCore : IDisposable
 			if (string.IsNullOrEmpty(name)) return false;
 			var obj = FindPlayerByName(name);
 			if (obj == null) return false;
+			// 不看自己(用户口径:移开目光时不该选中自己;同名时 FindPlayerByName 可能把自己返回)
+			var local = _objectTable.LocalPlayer;
+			if (local != null && obj.GameObjectId == local.GameObjectId) return false;
 			Plugin.TargetManager.Target = obj;
 			return true;
 		}
@@ -1385,6 +1456,40 @@ public class AuraCanAiCore : IDisposable
 		var local = _objectTable.LocalPlayer;
 		if (local == null) return false;
 		return GetOnlineStatusName(local.OnlineStatus.RowId) == "离开";
+	}
+
+	/// <summary>当前生效的角色名:
+	///   状态机开启 → 当前第二层(情景)绑定的人设(roleName);
+	///   状态机关闭 → 旧的「当前角色」下拉(LLMConfig.currentRole),兼容旧配置。</summary>
+	public string GetActiveRoleName()
+	{
+		if (_config.StateMachineEnabled && State != null)
+			return State.CurrentSceneRole;
+		return _llmSetting.currentRole ?? "";
+	}
+
+	/// <summary>是否处于「角色扮演中」:当前生效角色名非空即视为角色扮演中(状态机开启时 = 当前情景设置了人设)。
+	/// 行为「仅角色扮演时触发 / 角色扮演时不触发」判断用。纯配置读取,无游戏对象访问,不要求框架线程。</summary>
+	public bool IsRolePlaying() => !string.IsNullOrEmpty(GetActiveRoleName());
+
+	/// <summary>重建聊天上下文(换人设/换情景/切状态后用)。</summary>
+	public void ResetChatHistoryPublic() => ResetChatHistory();
+
+	/// <summary>保存插件配置(供 StateMachine 等内部组件调用)。</summary>
+	public void SaveConfig() { try { _config.Save(_pi); } catch { } }
+
+	/// <summary>本地玩家坐标/面向/地区(状态机记录「位置」用);未登录返回 null。自动切框架线程。</summary>
+	public (System.Numerics.Vector3 pos, float yaw, uint tid)? GetLocalTransform()
+	{
+		if (_framework.IsInFrameworkUpdateThread) return GetLocalTransformCore();
+		return _framework.RunOnFrameworkThread(GetLocalTransformCore).GetAwaiter().GetResult();
+	}
+
+	private (System.Numerics.Vector3 pos, float yaw, uint tid)? GetLocalTransformCore()
+	{
+		var local = _objectTable.LocalPlayer;
+		if (local == null) return null;
+		return (local.Position, local.Rotation, _clientState.TerritoryType);
 	}
 
 	/// <summary>演奏就绪状态检测(主声部=自己):是否诗人 + 是否演奏模式,附提示文本。
@@ -1587,14 +1692,15 @@ public class AuraCanAiCore : IDisposable
 		lock (_historyLock) _chatHistory.Add(message);
 		if (msgRole != "user") return;
 		if (!triggerReply) return; // 仅上下文采集(情感动作等),不触发回复
-		// ⚠️ 无人设(currentRole 无设定)时 AI 完全不触发(不回话、不请求),消息仅留在历史/网页。
-		var roleNow = GetLLMRole(_llmSetting.currentRole);
+		// ⚠️ 无人设(当前生效角色无设定)时 AI 完全不触发(不回话、不请求),消息仅留在历史/网页。
+		var activeRole = GetActiveRoleName();
+		var roleNow = GetLLMRole(activeRole);
 		if (string.IsNullOrEmpty(roleNow.setting))
 		{
 			if (!_noPersonaWarned)
 			{
 				_noPersonaWarned = true;
-				Log($"LLM 未触发:未选择人设(currentRole={(string.IsNullOrEmpty(_llmSetting.currentRole) ? "空" : _llmSetting.currentRole)});后续不再提示,选好角色即自动启用");
+				Log($"LLM 未触发:未选择人设(当前角色={(string.IsNullOrEmpty(activeRole) ? "空" : activeRole)});后续不再提示,选好角色即自动启用");
 			}
 			return;
 		}
@@ -1652,7 +1758,7 @@ public class AuraCanAiCore : IDisposable
 		{
 			try
 			{
-				var role = GetLLMRole(_llmSetting.currentRole);
+				var role = GetLLMRole(GetActiveRoleName());
 				await RunChatTurnAsync(role, ch, addr, count > 1);
 			}
 			catch (Exception e)
@@ -1709,8 +1815,9 @@ public class AuraCanAiCore : IDisposable
 	{
 		List<Message> msgs;
 		lock (_historyLock) msgs = _chatHistory.ToList();
-		if (manyMsgs && msgs.Count > 0)
-			msgs.Insert(Math.Max(0, msgs.Count - 1), new Message
+		// 注入提示一律拼到最后(与 BuildTurnMessages 同口径:注入的 system 只有最后一条)
+		if (manyMsgs)
+			msgs.Add(new Message
 			{
 				role = "system",
 				content = "(对方刚才短时间内连续发了几条消息:请把它们当成一件事自然地回应,不要逐条机械回复,不要复述每条)",
@@ -1722,19 +1829,21 @@ public class AuraCanAiCore : IDisposable
 	/// 回复频道跟随最后一条触发消息来源频道(channelNo/replyAddress),见采集与身份链路契约。</summary>
 	private async Task ProcessBodyReplyAsync(Role role, string channelNo, string replyAddress, bool manyMsgs)
 	{
-		var msgs = SnapshotHistoryWithScene(role, manyMsgs); // List<JObject>
+		var msgs = BuildTurnMessages(manyMsgs); // List<JObject>(末尾一条本轮提示 system)
 		for (int round = 0; round < 6; round++)
 		{
 			var (content, calls, asst) = await SendBodyChatAsync(msgs, role, allowTools: true);
 			if (calls.Count == 0)
 			{
+				// 自由回复轮:若模型给出的是英文(非中文人设要求)则带提示重试一次,仍不合格则丢弃
+				content = await EnsureChineseTextAsync(msgs, role, content);
 				if (!string.IsNullOrEmpty(content)) AppendAssistantAndEcho(content, channelNo, replyAddress);
 				return;
 			}
 			var actionCall = calls.FirstOrDefault(c => c.name == "rp_body_action");
 			bool hasAction = !string.IsNullOrEmpty(actionCall.name);
 			// 信息/轻动作工具(查询 或 纯转身看向):face_player 也走回填循环,让模型决定之后说/动什么
-			var infoCalls = calls.Where(c => c.name is "lookup_player" or "list_seats" or "face_player").ToList();
+			var infoCalls = calls.Where(c => c.name is "lookup_player" or "list_seats" or "face_player" or "rp_emote" or "leave_scene" or "switch_mood" or "switch_scene" or "rp_idle_action" or "party_action").ToList();
 			if (hasAction && infoCalls.Count == 0)
 			{
 				// 纯动作轮:解析并执行
@@ -1746,25 +1855,42 @@ public class AuraCanAiCore : IDisposable
 					return;
 				}
 				var actedDesc = ExecuteBodyAction(action, target);
+				// 动作轮附带的 content 是模型的动作旁白/内心独白(实测 DeepSeek 常写英文,如
+				// "I turn and walk over to X"),违反输出规则,绝非可发送台词 → 一律丢弃不入历史,
+				// 由下方补台词轮统一产出真正台词(契约:动作绝不写进台词)。
 				if (!string.IsNullOrEmpty(content))
 				{
-					AppendAssistantAndEcho(content, channelNo, replyAddress);
-					return; // 台词已说,动作并行进行
+					Log($"LLM 动作轮旁白已忽略(不发送): {TruncateLog(content, 80)}");
+					content = null;
 				}
 				if (actedDesc != null)
 				{
-					// 只做了动作没给台词 → 补一轮"说台词"
-					var msgs2 = new List<JObject>(msgs)
+					// 只做了动作没给台词 → 补一轮"说台词"。提示写死:动作已在后台执行,不得再调用工具。
+					// (并进末尾那条「本轮提示」system,不另起一条)
+					var msgs2 = new List<JObject>(msgs);
+					AppendToLastSystem(msgs2, $"(你的身体动作「{actedDesc}」已在后台执行(正在走/正在坐),不需要再调用任何工具,也不要重复发动作。现在轮到角色开口:用简体中文直接说一句此刻最自然的话。严禁工具调用,严禁输出任何尖括号/标签/tool_calls/XML 文本,直接给可以开口的台词本身,不加引号)");
+					var (c2, calls2, _) = await SendBodyChatAsync(msgs2, role, allowTools: false);
+					// 实测:模型在"说台词"环节仍可能惯性再发一次动作(sit)——XML 文本泄漏或标准 tool_calls 都有。
+					// 识别后纠正一轮(明说动作已做),避免静默空转两轮后没台词。
+					if (calls2.Count > 0 || (!string.IsNullOrEmpty(c2) && LooksLikeToolLeak(c2)))
 					{
-						new JObject { ["role"] = "system", ["content"] = $"(你刚才执行了身体动作:{actedDesc}。现在轮到你的角色开口,直接输出此刻该说的台词。严禁调用任何工具,严禁输出尖括号/标签/tool_calls 之类格式,只给可以开口说的话)" }
-					};
-					var (c2, _, _) = await SendBodyChatAsync(msgs2, role, allowTools: false);
+						Log($"LLM 补台词轮又输出工具调用(动作已执行),纠正后重试: {TruncateLog(string.IsNullOrEmpty(c2) ? "(标准tool_calls)" : c2, 80)}");
+						AppendToLastSystem(msgs2, "(动作已经发出并正在执行,你刚才那条又写了工具调用,不算台词。现在请只输出一句简体中文台词本身,不要任何标签、括号或说明)");
+						var (c3, _, _) = await SendBodyChatAsync(msgs2, role, allowTools: false);
+						c2 = c3;
+					}
+					c2 = await EnsureChineseTextAsync(msgs2, role, c2);
 					if (!string.IsNullOrEmpty(c2)) AppendAssistantAndEcho(c2, channelNo, replyAddress);
 				}
 				return;
 			}
 
 			// 有查询(可能并行多个,甚至混了动作):assistant 整条入库,再对每个 tool_call_id 逐个回填结果,让模型继续决策
+			if (!string.IsNullOrEmpty(content) && IsMostlyLatin(content))
+			{
+				Log($"LLM 查询轮旁白已从上下文清空(仅留工具调用): {TruncateLog(content, 60)}");
+				asst["content"] = ""; // 带 tool_calls 的 assistant 文本只是模型旁白,清空防英文习惯传染
+			}
 			msgs.Add(asst);
 			foreach (var c in calls)
 			{
@@ -1776,18 +1902,43 @@ public class AuraCanAiCore : IDisposable
 		}
 	}
 
-	/// <summary>历史快照(转 JObject)+ 场景注入;攒了多条时插"综合回应"提示。后续信息工具轮会把 assistant(tool_calls)+tool 结果追加进来。</summary>
-	private List<JObject> SnapshotHistoryWithScene(Role role, bool manyMsgs)
+	/// <summary>历史快照 + **一条**「本轮提示」system 消息(拼在最后,场景/现场动作/攒条提醒/额外指令全部合并成这一条)。
+	/// ⚠️ 用户口径 2026-09-11:注入的 system 提示词只该有最后一条——以前会把场景/攒条提示插在最后一条 user 之前,
+	/// 加上工具轮/补台词轮再各塞一条,一个请求里会出现好几条 system,模型容易被互相干扰(实测:叫她让开时她什么都不做)。
+	/// 注意:人设卡仍是历史里的第 0 条 system(持久 persona 锚点),不属于“本轮注入”。</summary>
+	private List<JObject> BuildTurnMessages(bool manyMsgs, string extraInstruction = "")
 	{
 		List<JObject> copy;
 		lock (_historyLock) copy = _chatHistory.Select(m => new JObject { ["role"] = m.role ?? "user", ["content"] = m.content ?? "" }).ToList();
-		if (manyMsgs && copy.Count > 0)
-			copy.Insert(Math.Max(0, copy.Count - 1), new JObject { ["role"] = "system", ["content"] = "(对方刚才短时间内连续发了几条消息:请把它们当成一件事自然地回应,不要逐条机械回复,不要复述每条)" });
+
+		var parts = new List<string>();
+		if (manyMsgs)
+			parts.Add("(对方刚才短时间内连续发了几条消息:请把它们当成一件事自然地回应,不要逐条机械回复,不要复述每条)");
 		var scene = BuildSceneSnippet();
-		if (scene.Length > 0)
-			copy.Insert(Math.Max(0, copy.Count - 1), new JObject { ["role"] = "system", ["content"] = scene });
+		if (scene.Length > 0) parts.Add(scene);
+		var hints = TakePendingActionHints(); // 对方的动作/表情:只在本轮出现一次
+		if (hints.Count > 0) parts.Add(BuildActionHintText(hints));
+		var sysHints = TakePendingSystemHints(); // 加入/退出小队等事件:只在本轮出现一次
+		if (sysHints.Count > 0) parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境/心情,用 switch_mood / switch_scene 切到合适的状态;否则忽略。");
+		if (!string.IsNullOrWhiteSpace(extraInstruction)) parts.Add(extraInstruction);
+
+		if (parts.Count > 0)
+			copy.Add(new JObject { ["role"] = "system", ["content"] = string.Join("\n\n", parts) });
 		return copy;
 	}
+
+	/// <summary>把「本轮额外指令」并进最后一条 system 消息(没有就追加)。
+	/// 保证一个请求里除人设卡外只有 **最后一条** 注入的 system(补台词/重试纠正/中文把关都走这里)。</summary>
+	private static void AppendToLastSystem(List<JObject> msgs, string text)
+	{
+		if (string.IsNullOrWhiteSpace(text)) return;
+		var last = msgs.Count > 0 ? msgs[^1] : null;
+		if (last != null && last["role"]?.ToString() == "system")
+			last["content"] = (last["content"]?.ToString() ?? "") + "\n\n" + text;
+		else
+			msgs.Add(new JObject { ["role"] = "system", ["content"] = text });
+	}
+
 
 	/// <summary>调用 DeepSeek(带工具)。返回 (content, 本回合全部 tool_calls(name/args/id), assistant原始消息JObject)。</summary>
 	private async Task<(string? content, List<(string name, string? args, string id)> calls, JObject asst)> SendBodyChatAsync(List<JObject> messages, Role role, bool allowTools)
@@ -1807,7 +1958,7 @@ public class AuraCanAiCore : IDisposable
 				["messages"] = jm,
 			};
 			if (role.stop != null && role.stop.Count > 0) body["stop"] = new JArray(role.stop.Select(s => JToken.FromObject(s)));
-			if (allowTools) body["tools"] = BuildBodyActionTools();
+			if (allowTools) body["tools"] = BuildBodyActionTools(role);
 			var json = body.ToString(Formatting.None);
 			Log($"BODYREQ:{json}");
 			using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.deepseek.com/chat/completions");
@@ -1868,6 +2019,36 @@ public class AuraCanAiCore : IDisposable
 		}
 	}
 
+	/// <summary>发送前语言把关:文本主体为拉丁字母(英文等)时,追加"请用简体中文"提示重试一次;重试仍不合格则丢弃(不发英文)。</summary>
+	private async Task<string?> EnsureChineseTextAsync(List<JObject> msgs, Role role, string? content)
+	{
+		if (string.IsNullOrEmpty(content) || !IsMostlyLatin(content)) return content;
+		Log($"LLM 输出非中文,重试一次: {TruncateLog(content, 100)}");
+		AppendToLastSystem(msgs, "(你刚才输出的不是简体中文,不合格。请只用简体中文重新说一句此刻该说的台词,不要解释,不要调用任何工具)");
+		var (c2, _, _) = await SendBodyChatAsync(msgs, role, allowTools: false);
+		if (!string.IsNullOrEmpty(c2) && IsMostlyLatin(c2))
+		{
+			Log($"LLM 重试后仍非中文,丢弃不发送: {TruncateLog(c2, 100)}");
+			return null;
+		}
+		return c2;
+	}
+
+	/// <summary>粗略判定文本主体为拉丁字母(英文等)而非中文;用于发送前语言把关。中文名混在英文句里也会被正确判为英文(如 "I turn to 奥·乌儿.")。</summary>
+	private static bool IsMostlyLatin(string s)
+	{
+		int cjk = 0, latin = 0;
+		foreach (var ch in s)
+		{
+			if (ch >= 0x4E00 && ch <= 0x9FFF) cjk++;
+			else if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) latin++;
+		}
+		return latin > 0 && latin > cjk * 2;
+	}
+
+	/// <summary>日志截断(避免超长行刷屏)。</summary>
+	private static string TruncateLog(string s, int maxLen) => s.Length <= maxLen ? s : s.Substring(0, maxLen) + "…";
+
 	/// <summary>执行信息型工具(模型需要时才调用;含游戏数据读取,框架线程编组)。返回纯文本结果。</summary>
 	private string RunInfoTool(string toolName, string argsJson)
 	{
@@ -1890,6 +2071,42 @@ public class AuraCanAiCore : IDisposable
 					var who = string.IsNullOrEmpty(target) ? GetLatestContactUser() : target;
 					if (string.IsNullOrEmpty(who)) return "face_player:不知道看谁(没有 target 也没有最近接触的人)";
 					return TryLook(who) ? $"已转身看向 {who}" : $"看 {who} 失败(不在当前场景或找不到)";
+				}
+				case "leave_scene":
+				{
+					// 「离开」:走到人少的地方(有空椅子就坐下),并开始「静默 60 秒自动退队」倒计时
+					return LeaveScene();
+				}
+				case "rp_emote":
+				{
+					// 角色自定义动作(前端「角色设定 → 角色管理」里的动作列表;与当前角色绑定)
+					var actionName = "";
+					try { actionName = (JObject.Parse(argsJson)["name"]?.ToString() ?? "").Trim(); } catch { }
+					return RoleActions.PerformByName(GetActiveRoleName(), actionName);
+				}
+				case "switch_mood":
+				{
+					var moodName = "";
+					try { moodName = (JObject.Parse(argsJson)["mood"]?.ToString() ?? "").Trim(); } catch { }
+					return State.SwitchMood(moodName).message;
+				}
+				case "switch_scene":
+				{
+					var sceneName = "";
+					try { sceneName = (JObject.Parse(argsJson)["scene"]?.ToString() ?? "").Trim(); } catch { }
+					return State.SwitchScene(sceneName).message;
+				}
+				case "rp_idle_action":
+				{
+					var idleName = "";
+					try { idleName = (JObject.Parse(argsJson)["name"]?.ToString() ?? "").Trim(); } catch { }
+					return State.PerformIdleAction(idleName);
+				}
+				case "party_action":
+				{
+					var op = ""; var target = "";
+					try { var a = JObject.Parse(argsJson); op = (a["op"]?.ToString() ?? "").Trim(); target = (a["target"]?.ToString() ?? "").Trim(); } catch { }
+					return PartyAction(op, target);
 				}
 				case "lookup_player":
 				{
@@ -1981,7 +2198,7 @@ public class AuraCanAiCore : IDisposable
 	}
 
 	/// <summary>身体工具集:rp_body_action(动作)+ 按需信息查询(lookup_player/list_seats,模型视情况主动调,避免每轮全量塞入)</summary>
-	private static JArray BuildBodyActionTools()
+	private JArray BuildBodyActionTools(Role role)
 	{
 		JObject Func(string name, string desc, JObject props, string[] required)
 		{
@@ -2001,9 +2218,9 @@ public class AuraCanAiCore : IDisposable
 				},
 			};
 		}
-		return new JArray
+		var tools = new JArray
 		{
-			Func("rp_body_action", "让角色做身体动作(走近/跟随/走开/转身面向/停止移动/坐)。approach/follow/leave/face 只能对当前在场的玩家;先想清楚目标离你多远再决定动不动,拿不准用 lookup_player。sit 目标:座位名 / #id / 玩家名(坐那个玩家旁边最近的空座,如对方邀你坐身边就用玩家名)/ 空=自己最近的空座。动作绝不写进台词。",
+			Func("rp_body_action", "让角色做身体动作(走近/跟随/走开/转身面向/停止移动/坐)。approach/follow/leave/face 只能对当前在场的玩家;先想清楚目标离你多远再决定动不动,拿不准用 lookup_player。sit 目标:座位名 / #id / 玩家名(坐那个玩家旁边最近的空座,如对方邀你坐身边就用玩家名)/ 空=自己最近的空座。⚠️ 对方说“让一让/挪一挪/别挡着/借过/站边上点”→ 用 leave(target=对方) 或 leave_scene(退到人少的地方),**不要用 stop**:stop 只是终止正在进行的移动,它不会让你真的让开。动作绝不写进台词。",
 				new JObject
 				{
 					["action"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "approach", "follow", "leave", "face", "stop", "sit" } },
@@ -2024,7 +2241,66 @@ public class AuraCanAiCore : IDisposable
 				{
 					["near"] = new JObject { ["type"] = "string", ["description"] = "可选:想坐在哪个玩家旁边,就填其名字;不填则列全部" },
 				}, Array.Empty<string>()),
+			Func("leave_scene", "离开(退场):结束这段互动、告辞、不想再被围观时用。会走到人少的地方(有空着的椅子就坐下),之后若 60 秒没人说话会自动退出小队。调用后你可以再说一句告别的话。",
+				new JObject(), Array.Empty<string>()),
 		};
+
+		// 角色自定义动作(AI 可主动执行;动作列表在前端「角色设定 → 角色管理」里配,与角色绑定)
+		var actions = role.actions ?? new List<RoleAction>();
+		if (actions.Count > 0)
+		{
+			var names = new JArray(actions.Select(a => JToken.FromObject(RoleActionPlayer.DisplayName(a))).Distinct().ToArray());
+			var desc = string.Join("; ", actions.Select(a =>
+			{
+				var parts = new List<string>();
+				if (!string.IsNullOrWhiteSpace(a.emote)) parts.Add($"动作「{a.emote.Trim()}」");
+				if (!string.IsNullOrWhiteSpace(a.text)) parts.Add($"文字「{a.text.Trim()}」");
+				if (a.cooldown > 0) parts.Add($"冷却{a.cooldown}秒");
+				return $"{RoleActionPlayer.DisplayName(a)}: {string.Join(",", parts)}";
+			}));
+			tools.Add(Func("rp_emote",
+				"做角色自定义动作(播放游戏表情 + 在聊天栏显示配套文字,相当于依次执行宏)。这是「做的事」而不是说的话:严禁把动作写进台词。冷却中的动作会被拒绝并告知剩余秒数,此时换个动作或直接说话。可用动作: " + desc,
+				new JObject
+				{
+					["name"] = new JObject { ["type"] = "string", ["enum"] = names, ["description"] = "动作名称(角色动作列表里的「名称」)" },
+				}, new[] { "name" }));
+		}
+
+		// 状态机工具(开启时):第一层自由切 / 第二层按路径切 / 指定待机动作
+		if (_config.StateMachineEnabled && State != null)
+		{
+			var moods = _config.SmMoods.Where(m => !string.IsNullOrWhiteSpace(m.name)).ToList();
+			if (moods.Count > 0)
+			{
+				tools.Add(Func("switch_mood",
+					"切换你的角色状态/心情(状态机第一层)。当处境或心情变了(被冷落、受伤、开心、亢奋、疲惫…)时用;可自由选择。可用状态: " + string.Join(" / ", moods.Select(m => m.name)),
+					new JObject { ["mood"] = new JObject { ["type"] = "string", ["enum"] = new JArray(moods.Select(m => JToken.FromObject(m.name)).ToArray()) } }, new[] { "mood" }));
+			}
+			var allowed = State.AllowedScenes();
+			if (State.CurrentMood != null && allowed.Count > 0)
+			{
+				tools.Add(Func("switch_scene",
+					"切换当前的『情景模式』(状态机第二层)。只能在当前角色状态下切换,且受配置的路径限制。可用情景: " + string.Join(" / ", allowed.Select(s => s.name)),
+					new JObject { ["scene"] = new JObject { ["type"] = "string", ["enum"] = new JArray(allowed.Select(s => JToken.FromObject(s.name)).ToArray()) } }, new[] { "scene" }));
+			}
+			var curScene = State.CurrentScene;
+			if (curScene != null && curScene.actions.Count > 0)
+			{
+				tools.Add(Func("rp_idle_action",
+					"做当前情景动作列表里的某个动作(和自动轮换的是同一批;带位置的会先走过去)。想做特定动作而不是等它自动轮换时用。可用: " + string.Join(" / ", curScene.actions.Select(a => StateMachine.DisplayName(a))),
+					new JObject { ["name"] = new JObject { ["type"] = "string", ["enum"] = new JArray(curScene.actions.Select(a => JToken.FromObject(StateMachine.DisplayName(a))).ToArray()) } }, new[] { "name" }));
+			}
+		}
+
+		// 组队:邀请/接受/退队
+		tools.Add(Func("party_action",
+			"组队操作:invite(邀请某人加入你的小队,target=玩家名;对方需在当前场景)、accept(接受别人刚发来的组队邀请)、leave(退出当前小队)。想和别人一起行动时用。",
+			new JObject
+			{
+				["op"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "invite", "accept", "leave" } },
+				["target"] = new JObject { ["type"] = "string", ["description"] = "invite 时填要邀请的玩家名;accept/leave 可空" },
+			}, new[] { "op" }));
+		return tools;
 	}
 
 	/// <summary>执行身体动作(框架线程调度),返回中文结果描述(供补台词请求引用);动作未知返回 null(不补台词)。</summary>
@@ -2085,12 +2361,45 @@ public class AuraCanAiCore : IDisposable
 		}
 	}
 
+	/// <summary>要清掉的成对括号(全半角都算;按内层优先逐轮清)</summary>
+	private static readonly (string Open, string Close)[] ScriptBracketPairs =
+	{
+		("（", "）"), ("(", ")"), ("【", "】"), ("［", "］"), ("[", "]"),
+		("｛", "｝"), ("{", "}"), ("〈", "〉"), ("《", "》"), ("〔", "〕"),
+	};
+
+	/// <summary>
+	/// 去掉台词里的括号/星号动作描写(如“（轻轻点头）”“*叹气*”)。
+	/// 先反复去掉“最内层成对括号含内容”(最多 3 轮,处理嵌套),再清掉残留的单个括号与星号;
+	/// 太长的长句不会被破坏(只删括号及其内部内容)。整句都是描写时返回空串(调用方据此不发)。
+	/// </summary>
+	private static string StripBracketActions(string text)
+	{
+		if (string.IsNullOrEmpty(text)) return text;
+		var s = text;
+		foreach (var (open, close) in ScriptBracketPairs)
+		{
+			var inner = $"{Regex.Escape(open)}[^{Regex.Escape(open)}{Regex.Escape(close)}]*{Regex.Escape(close)}";
+			for (int i = 0; i < 3 && Regex.IsMatch(s, inner); i++)
+				s = Regex.Replace(s, inner, "");
+			s = s.Replace(open, "").Replace(close, ""); // 残留的不成对括号直接去掉(台词里不该出现)
+		}
+		s = Regex.Replace(s, @"\*+[^*\r\n]{2,}\*+", ""); // *叹气*
+		s = s.Replace("*", ""); // 残留星号
+		s = Regex.Replace(s, @"[ \t]{2,}", " ");
+		return s.Trim(' ', '\t', '　');
+	}
+
 	/// <summary>内容是否像"工具调用被当台词输出"(乱码防护:命中则不发送)</summary>
 	private static bool LooksLikeToolLeak(string text)
 		=> text.Contains("<tool_calls", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("<invoke", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("<parameter", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("rp_body_action", StringComparison.OrdinalIgnoreCase)
+		|| text.Contains("rp_idle_action", StringComparison.OrdinalIgnoreCase)
+		|| text.Contains("switch_mood", StringComparison.OrdinalIgnoreCase)
+		|| text.Contains("switch_scene", StringComparison.OrdinalIgnoreCase)
+		|| text.Contains("party_action", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("tool_calls", StringComparison.OrdinalIgnoreCase);
 
 	/// <summary>是否含可尝试恢复的 XML 工具块(标准 <invoke> 结构)。宽松判定,避免把正常台词误伤。</summary>
@@ -2144,7 +2453,19 @@ public class AuraCanAiCore : IDisposable
 		var clean = System.Text.RegularExpressions.Regex.Replace(content, "[\u0000-\u001F]", "").Replace("\"", "");
 		if (clean.Length == 0) return;
 
-		// 0) 安全过滤:模型把工具调用当文本输出时(如 <tool_calls><invoke rp_body_action>…),丢弃不发送
+		// 0) 去掉括号/星号里的动作·神态描写(模型偶发在台词里写「(轻轻点头)」「*叹气*」这类描写;
+		//    角色真正要做的动作应该走 rp_emote 工具,台词必须干净。整句都是描写 → 不发)
+		var raw = clean;
+		clean = StripBracketActions(clean);
+		if (clean.Length == 0)
+		{
+			Log($"LLM 台词被过滤:整句都是括号/星号描写,不发送 | 原文 {raw}");
+			return;
+		}
+		if (clean != raw)
+			Log($"LLM 台词已去除括号描写: 「{clean}」 | 原文 「{raw}」");
+
+		// 0.1) 安全过滤:模型把工具调用当文本输出时(如 <tool_calls><invoke rp_body_action>…),丢弃不发送
 		if (LooksLikeToolLeak(clean))
 		{
 			Log($"LLM 回复丢弃:疑似工具调用文本泄漏,不发送 | {clean.Substring(0, Math.Min(clean.Length, 80))}");
@@ -2182,9 +2503,67 @@ public class AuraCanAiCore : IDisposable
 		Log($"LLM 台词已发({cmd}): {(ok ? "成功" : "失败(未登录等)")} | {clean}");
 		if (ok)
 		{
-			_lastLlmEchoContent = clean; // 供自身回显去重
+			_lastLlmEchoContent = clean; // 供自身回显去重(否则聊天事件回显会把同一条台词再写进历史一次)
 			_lastLlmEchoAt = DateTime.Now;
 		}
+	}
+
+	/// <summary>对方的原创/情感动作(1C/1D):不进聊天历史,只作为「只存在一轮的现场提示」在下一次请求里注入。
+	/// 有可回复的普通文本频道时顺带触发一次回应(动作也值得回应);无人设/未配 Key 时不触发(提示留着,下次请求仍会带上)。</summary>
+	private void NotifyActionHint(string hint)
+	{
+		if (string.IsNullOrEmpty(_llmSetting.deepseekKey)) return;
+		lock (_historyLock) _pendingActionHints.Add((hint, DateTime.Now));
+		Log($"动作现场提示已记录(不入历史): {hint}");
+		var roleNow = GetLLMRole(GetActiveRoleName());
+		if (string.IsNullOrEmpty(roleNow.setting)) return; // 无人设:不回复(与普通消息一致)
+		if (_lastSpeakChannel.Length > 0) NotifyChatTurnPending(_lastSpeakChannel, _lastSpeakAddr);
+	}
+
+	/// <summary>取走未过期的现场动作提示(取走即清空 = 只存在一轮)。</summary>
+	private List<string> TakePendingActionHints()
+	{
+		lock (_historyLock)
+		{
+			var fresh = _pendingActionHints
+				.Where(h => (DateTime.Now - h.At).TotalSeconds <= ActionHintTtlSec)
+				.Select(h => h.Text)
+				.ToList();
+			_pendingActionHints.Clear();
+			return fresh;
+		}
+	}
+
+	/// <summary>记一条一次性系统事件提示(加入/退出小队等;下一轮请求注入一次即清)。</summary>
+	public void PushSystemHint(string text)
+	{
+		if (string.IsNullOrWhiteSpace(text)) return;
+		lock (_historyLock) _pendingSystemHints.Add((text, DateTime.Now));
+	}
+
+	/// <summary>取走未过期的一次性系统事件提示(取走即清空)。</summary>
+	private List<string> TakePendingSystemHints()
+	{
+		lock (_historyLock)
+		{
+			var fresh = _pendingSystemHints
+				.Where(h => (DateTime.Now - h.At).TotalSeconds <= ActionHintTtlSec)
+				.Select(h => h.Text)
+				.ToList();
+			_pendingSystemHints.Clear();
+			return fresh;
+		}
+	}
+
+	/// <summary>现场动作提示文本(注入成一条 system 消息;不是台词、不入历史)。</summary>
+	private static string BuildActionHintText(List<string> hints)
+	{
+		var sb = new System.Text.StringBuilder();
+		sb.Append("## 现场动作(只是本轮提示,不是台词;不会留在聊天记录里)\n");
+		foreach (var h in hints) sb.Append("- ").Append(h).Append('\n');
+		sb.Append("处理方式:这是对方(或周围人)刚做出的动作/表情。你可以用 rp_emote 回一个动作,或直接开口回应;" +
+				"绝不要把动作写进台词,也不要用括号/星号描述动作。");
+		return sb.ToString();
 	}
 
 	/// <summary>当前场景上下文文本(身体演出模式注入;框架线程安全)。含:地区 / 在场玩家(距离,是否在看你)/ 你的移动状态。</summary>
@@ -2231,10 +2610,14 @@ public class AuraCanAiCore : IDisposable
 				else sb.Append("身边没有其他人; ");
 			}
 			sb.Append("你:").Append(Movement.StatusText()).Append(". ");
+			sb.Append(IsInParty() ? "队伍:在小队(队友的话用 /p 能听到); " : "队伍:一个人(不在小队); ");
 			// 最近一次移动结果(25 秒内),供模型理解刚才动作的成败
 			if (_lastMoveResult != null && (DateTime.Now - _lastMoveResultAt).TotalSeconds <= 25)
 				sb.Append("(刚结束的移动:").Append(_lastMoveResult).Append(")");
-			sb.Append("要确认某人/自己距离用 lookup_player(不带名字=列在场玩家,含种族/性别/在线状态/在你哪边);想坐哪可 list_seats(可传 near=某人看其旁座位);移动/坐下用 rp_body_action(approach/follow/leave/face/sit/stop);对谁说话/回应谁时可用 face_player 转身看向对方(多人时尤其适用);坐某人旁边 = sit 且 target 填那个玩家名(自动找其最近空座)或按 list_seats 的距离挑 #id。距离永远以当前情况为准——对方可能已走开,别以为还在原位。动作绝不写进台词。");
+			sb.Append("要确认某人/自己距离用 lookup_player(不带名字=列在场玩家,含种族/性别/在线状态/在你哪边);想坐哪可 list_seats(可传 near=某人看其旁座位);移动/坐下用 rp_body_action(approach/follow/leave/face/sit/stop);想告辞/结束互动/退到一边时用 leave_scene(会走到人少的地方,60 秒没人说话自动退小队);对谁说话/回应谁时可用 face_player 转身看向对方(多人时尤其适用);坐某人旁边 = sit 且 target 填那个玩家名(自动找其最近空座)或按 list_seats 的距离挑 #id。距离永远以当前情况为准——对方可能已走开,别以为还在原位。动作绝不写进台词。已列出的在场者不必重复 lookup_player(除非要看种族/职业等细节或确认是否还在);没变化就别反复查。");
+			// 状态机:当前状态/情景/人设/动作/可切换路径(开启时)
+			var stateDesc = State?.DescribeStateForAi() ?? "";
+			if (stateDesc.Length > 0) sb.Append('\n').Append(stateDesc);
 		}
 		catch (Exception e)
 		{
@@ -2246,9 +2629,11 @@ public class AuraCanAiCore : IDisposable
 	/// <summary>输出格式硬规则:追加到所有角色 system 提示末尾,禁止动作描写等(最高优先级)</summary>
 	private const string OutputFormatRule =
 		"## 输出规则(最高优先级,违反即不合格)\\n" +
-		"- 只输出角色台词本身,禁止任何动作描写、神态描写、括号/星号/引号括注、表情符号\\n" +
+		"- 只输出角色台词本身,禁止任何动作描写、神态描写、括号/星号/引号括注、表情符号。严禁用括号写动作(如「(轻轻点头)」「*叹气*」):想做动作就调 rp_emote / rp_body_action 工具,括号描写会被程序直接删掉\\n" +
 		"- 禁止\"说着、笑道、点头、递茶、轻叹\"等叙述词开头或结尾\\n" +
 		"- 禁止描述表情、动作、心理活动;你的每一条回复都会被直接作为游戏内台词发送\\n" +
+		"- 必须使用简体中文输出台词,禁止输出英文或其他外语\\n" +
+		"- 需要调用工具(查人/查座/动作)的那一轮,除工具参数外不要输出任何文字,不要写\"我看一下…\"\"我走过去…\"之类的旁白\\n" +
 		"- 输出必须是可以直接说出口的话,不加任何修饰";
 
 	private void ResetChatHistory()
@@ -2256,12 +2641,15 @@ public class AuraCanAiCore : IDisposable
 		lock (_historyLock)
 		{
 			_chatHistory.Clear();
-			var role = GetLLMRole(_llmSetting.currentRole);
+			var role = GetLLMRole(GetActiveRoleName());
 			if (!string.IsNullOrEmpty(role.setting))
 			{
 				var sys = Regex.Replace(role.setting.Replace("\n", "\\n"), "[\u0000-\u001F]", " ");
 				// 追加输出硬规则:所有角色统一生效,防止模型输出动作描写
 				sys += "\\n" + OutputFormatRule;
+				// 追加角色自定义动作列表(AI 可主动执行;内容随角色走)
+				var actRule = BuildRoleActionRule(role);
+				if (actRule.Length > 0) sys += "\\n" + actRule;
 				_chatHistory.Add(new Message { content = sys, role = "system" });
 			}
 		}
@@ -2315,6 +2703,285 @@ public class AuraCanAiCore : IDisposable
 			return false;
 		}
 		return RunCommand(cmd, content);
+	}
+
+	// ==================== 小队解散清理 + 「离开」(AI 主动退场)(2026-09-11) ====================
+
+	private const double LeaveQuietSec = 60; // 「离开」激活后:多久没人说话就自动退队(秒)
+	private const float LeaveQuietClearance = 4f; // 「人少」判定:离最近的其他玩家至少几米
+	private const float LeaveAlreadyQuietRadius = 10f; // 离最近的人已经这么远 → 不用再挪窝
+
+	/// <summary>小队状态变化检测(500ms tick):从「在小队」→「不在小队」(解散/退队/被踢)→ 清空对话上下文与动作队列。
+	/// 用户口径 2026-09-11:解散小队时清空上下文和动作队列。</summary>
+	private void CheckPartyStateTick()
+	{
+		var inParty = IsInParty();
+		if (inParty == _wasInParty) return;
+		_wasInParty = inParty;
+		if (inParty) { Log("小队状态:已加入小队(不清上下文)"); PushSystemHint("【事件】你加入了小队（现在和队友在一起）。"); return; }
+		PushSystemHint("【事件】你离开了小队 / 队伍解散了（现在是一个人）。");
+
+		// RP 条件(用户口径):只有前端「角色设定」选了当前角色(= 角色扮演中)才清;
+		// 没选角色时本来就不回复、不采集进上下文,清了反而会把用户下次选角色前的历史误删。
+		if (!IsRolePlaying())
+		{
+			Log("小队已解散/退出小队:当前未处于角色扮演中(未选当前角色),不清上下文");
+			_leaveArmed = false;
+			return;
+		}
+
+		ResetChatHistory(); // 清空聊天上下文(重建 system 提示)
+		RoleActions?.Reset(); // 清空待执行动作与冷却
+		lock (_historyLock) _pendingActionHints.Clear(); // 现场动作提示也一并清
+		_replyPending = false;
+		_lastSpeakChannel = "";
+		_lastSpeakAddr = "";
+		_leaveArmed = false;
+		Log("小队已解散/退出小队:已清空对话上下文、动作队列、现场提示");
+	}
+
+	/// <summary>「离开」倒计时(500ms tick):激活后若有 60 秒没有任何其他人发言 → 主动退出小队。</summary>
+	private void CheckLeavePartyTick()
+	{
+		if (!_leaveArmed) return;
+		if (!IsInParty()) { _leaveArmed = false; Log("「离开」取消:已不在小队"); return; }
+		if ((DateTime.Now - _leaveLastChatAt).TotalSeconds < LeaveQuietSec) return;
+		_leaveArmed = false;
+		var ok = LeavePartyNow();
+		Log(ok ? $"「离开」已生效:{LeaveQuietSec:0} 秒没人说话,已主动退出小队" : "「离开」自动退队失败(见日志)");
+	}
+
+	/// <summary>主动退出小队(公开入口,供 /aca party leave 测试与内部自动退队共用)。</summary>
+	public bool LeavePartyPublic() => LeavePartyNow();
+
+	/// <summary>主动退出小队(游戏原生 InfoProxyPartyMember.LeaveParty,不依赖聊天命令文本/本地化)。</summary>
+	private bool LeavePartyNow()
+	{
+		try
+		{
+			if (_framework.IsInFrameworkUpdateThread) return LeavePartyCore();
+			return _framework.RunOnFrameworkThread(LeavePartyCore).GetAwaiter().GetResult();
+		}
+		catch (Exception e) { LogErr($"退出小队失败: {e.Message}"); return false; }
+	}
+
+	private static unsafe bool LeavePartyCore()
+	{
+		try
+		{
+			var proxy = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyPartyMember.Instance();
+			if (proxy == null) { Plugin.Log?.Error("退出小队失败:InfoProxyPartyMember 为 null"); return false; }
+			var ok = proxy->LeaveParty();
+			if (!ok) Plugin.Log?.Warning("退出小队失败:LeaveParty() 返回 false(可能已不在小队/状态不允许)");
+			return ok;
+		}
+		catch (Exception e) { Plugin.Log?.Error($"退出小队异常: {e}"); return false; }
+	}
+
+	/// <summary>组队动作(AI 工具 party_action):invite=邀请组队 / accept=接受邀请 / leave=退队。</summary>
+	public string PartyAction(string op, string target)
+	{
+		return (op ?? "").Trim().ToLowerInvariant() switch
+		{
+			"invite" => InviteToParty(target),
+			"accept" => AcceptPartyInvite(),
+			"leave" => LeavePartyNow() ? "已退出小队" : "退出小队失败(可能不在小队/状态不允许)",
+			_ => "party_action 的 op 只能是 invite/accept/leave",
+		};
+	}
+
+	/// <summary>邀请玩家组队:优先游戏原生 InfoProxyPartyInvite.InviteToPartyContentId,失败回退 /invite 命令。</summary>
+	private string InviteToParty(string target)
+	{
+		if (string.IsNullOrWhiteSpace(target)) return "邀请组队需要填玩家名";
+		try
+		{
+			if (_framework.IsInFrameworkUpdateThread) return InviteToPartyCore(target);
+			return _framework.RunOnFrameworkThread(() => InviteToPartyCore(target)).GetAwaiter().GetResult();
+		}
+		catch (Exception e) { LogErr($"邀请组队异常: {e.Message}"); return $"邀请出错:{e.Message}"; }
+	}
+
+	private unsafe string InviteToPartyCore(string target)
+	{
+		try
+		{
+			var p = FindPlayerByName(target);
+			if (p == null) return $"邀请失败:当前场景里找不到 {target}";
+			var clean = GetCleanName(p.Name.TextValue);
+			var world = p is IPlayerCharacter pc ? GetWorldName(pc.HomeWorld.RowId) : "";
+			var cid = p is IPlayerCharacter pc2 ? GetPlayerContentId(pc2) : 0UL;
+			var worldId = p is IPlayerCharacter pc3 ? (ushort)pc3.HomeWorld.RowId : (ushort)0;
+			if (cid != 0)
+			{
+				try
+				{
+					var proxy = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyPartyInvite.Instance();
+					if (proxy != null && proxy->InviteToPartyContentId(cid, worldId))
+					{
+						Log($"[组队] 已邀请 {clean}@{world}");
+						return $"已向 {clean} 发出组队邀请";
+					}
+				}
+				catch (Exception e) { Log($"[组队] InviteToPartyContentId 失败,回退命令: {e.Message}"); }
+			}
+			var nameWithWorld = string.IsNullOrEmpty(world) ? clean : $"{clean}@{world}";
+			var ok = RunCommand("/invite", nameWithWorld);
+			Log($"[组队] 邀请 {nameWithWorld} 命令: {(ok ? "成功" : "失败")}");
+			return ok ? $"已向 {clean} 发出组队邀请(命令)" : "邀请失败(未登录/找不到人)";
+		}
+		catch (Exception e) { LogErr($"邀请组队异常: {e.Message}"); return $"邀请出错:{e.Message}"; }
+	}
+
+	/// <summary>接受别人发来的组队邀请(游戏原生 InfoProxyPartyInvite.RespondToInvitation)。</summary>
+	private string AcceptPartyInvite()
+	{
+		try
+		{
+			if (_framework.IsInFrameworkUpdateThread) return AcceptPartyInviteCore();
+			return _framework.RunOnFrameworkThread(AcceptPartyInviteCore).GetAwaiter().GetResult();
+		}
+		catch (Exception e) { LogErr($"接受邀请异常: {e.Message}"); return $"接受邀请出错:{e.Message}"; }
+	}
+
+	private static unsafe string AcceptPartyInviteCore()
+	{
+		try
+		{
+			var proxy = FFXIVClientStructs.FFXIV.Client.UI.Info.InfoProxyPartyInvite.Instance();
+			if (proxy == null) return "接受邀请失败:InfoProxyPartyInvite 为 null";
+			var inviter = proxy->EntryCount == 0 ? "" : proxy->InviterName.ToString();
+			var inviterFull = proxy->EntryCount == 0 ? "" : proxy->InviterNameWithHomeworld.ToString();
+			if (string.IsNullOrEmpty(inviter) && string.IsNullOrEmpty(inviterFull)) return "当前没有待处理的组队邀请";
+			var ok = !string.IsNullOrEmpty(inviter) && proxy->RespondToInvitation(inviter, true);
+			if (!ok && !string.IsNullOrEmpty(inviterFull) && inviterFull != inviter)
+				ok = proxy->RespondToInvitation(inviterFull, true);
+			Plugin.Log?.Information($"[组队] 接受 {inviter} 的邀请: {(ok ? "成功" : "失败")}");
+			return ok ? $"已接受 {inviter} 的组队邀请" : $"接受 {inviter} 的邀请失败(邀请可能已过期)";
+		}
+		catch (Exception e) { Plugin.Log?.Error($"[组队] 接受邀请异常: {e.Message}"); return $"接受邀请出错:{e.Message}"; }
+	}
+
+	/// <summary>
+	/// AI 工具 leave_scene(「离开」):退到人少的地方(有空椅子就坐下),并开始「静默 60 秒自动退队」倒计时。
+	/// 返回给模型的结果描述(工具回填)。需在游戏框架线程调用(方法内部已编组)。
+	/// </summary>
+	public string LeaveScene()
+	{
+		if (_framework.IsInFrameworkUpdateThread) return LeaveSceneCore();
+		return _framework.RunOnFrameworkThread(LeaveSceneCore).GetAwaiter().GetResult();
+	}
+
+	private string LeaveSceneCore()
+	{
+		try
+		{
+			var local = _objectTable.LocalPlayer;
+			if (local == null) return "离开失败:未登录";
+			// 「离开」优先级最高:先停掉正在进行的移动/走位(避免走一半又走一半)
+			if (Movement.IsActive) { Movement.Stop(); Log("离开: 已中止进行中的移动"); }
+			// 走开之前先移开目光:不看任何人(也不看自己)——清空游戏目标/软目标,免得站在原地盯着人
+			ClearLook();
+			var inParty = IsInParty();
+			if (inParty) { _leaveArmed = true; _leaveLastChatAt = DateTime.Now; }
+			var tail = inParty ? $"{LeaveQuietSec:0} 秒内没人说话会自动退出小队" : "当前不在小队,无需退队";
+
+			var others = GetOtherPlayerPositions(local);
+			var nearest = others.Count == 0 ? float.MaxValue : others.Min(p => Dist2D(p, local.Position));
+
+			// 1) 先找「人少处的空座」(有空着的椅子就坐下)
+			var seat = FindQuietSeat(local.Position, others);
+			if (seat != null)
+			{
+				var msg = Movement.SitOnSeat($"#{seat.Id}");
+				if (msg.Length == 0) return $"已开始离开人群:去坐人少处的座位「{seat.Label()}」({tail})";
+				Log($"离开: 坐座失败({msg}),改为走到空处");
+			}
+
+			// 2) 附近还有人 → 走到离所有人最远的落脚点
+			if (nearest < LeaveAlreadyQuietRadius)
+			{
+				var dest = PickQuietPoint(local.Position, others);
+				if (dest.HasValue)
+				{
+					var clearance = MinDistToPlayers(dest.Value, others);
+					if (Movement.MoveToPoint(dest.Value))
+						return $"已开始走向人少的地方(落脚点离最近的人约 {clearance:0.#} 米;{tail})";
+				}
+				return $"没找到合适的落脚点,原地待着({tail})";
+			}
+
+			return $"周围已经没什么人了,原地待着({tail})";
+		}
+		catch (Exception e)
+		{
+			LogErr($"离开异常: {e.Message}");
+			return $"离开出错:{e.Message}";
+		}
+	}
+
+	/// <summary>除自己以外的附近玩家坐标(需在框架线程调用)</summary>
+	private List<System.Numerics.Vector3> GetOtherPlayerPositions(IPlayerCharacter local)
+	{
+		var list = new List<System.Numerics.Vector3>();
+		foreach (var o in _objectTable)
+		{
+			if (o.ObjectKind != ObjectKind.Pc) continue;
+			if (o.GameObjectId == local.GameObjectId) continue;
+			list.Add(o.Position);
+		}
+		return list;
+	}
+
+	private static float Dist2D(System.Numerics.Vector3 a, System.Numerics.Vector3 b)
+	{
+		var dx = a.X - b.X; var dz = a.Z - b.Z;
+		return MathF.Sqrt(dx * dx + dz * dz);
+	}
+
+	private static float MinDistToPlayers(System.Numerics.Vector3 p, List<System.Numerics.Vector3> others)
+	{
+		var best = float.MaxValue;
+		foreach (var o in others)
+		{
+			var d = Dist2D(p, o);
+			if (d < best) best = d;
+		}
+		return best;
+	}
+
+	/// <summary>「人少处的空座」:当前房子/楼层内、未被占用、离最近的其他玩家 >= LeaveQuietClearance 的座位里,离自己最近的一个。</summary>
+	private SeatPoint? FindQuietSeat(System.Numerics.Vector3 myPos, List<System.Numerics.Vector3> others)
+	{
+		var house = EnsureSceneState();
+		if (house == null) return null; // 没建房子/没座位记录 → 退化到走位
+		var tid = _clientState.TerritoryType;
+		return _config.Seats
+			.Where(s => s.HouseId == house.Id && s.TerritoryId == tid && !IsSeatOccupied(s))
+			.Where(s => MinDistToPlayers(new System.Numerics.Vector3(s.X, s.Y, s.Z), others) >= LeaveQuietClearance)
+			.OrderBy(s => PlaneDist2D(myPos, s))
+			.FirstOrDefault();
+	}
+
+	/// <summary>在自身周围环形采样,选「离所有人最远」的落脚点(6/9/12/15 米 × 16 方向);
+	/// 超过 12 米后每米扣分 1.5,避免为了躲人跑到天边。</summary>
+	private static System.Numerics.Vector3? PickQuietPoint(System.Numerics.Vector3 myPos, List<System.Numerics.Vector3> others)
+	{
+		if (others.Count == 0) return null;
+		System.Numerics.Vector3? best = null;
+		var bestScore = float.MinValue;
+		foreach (var radius in new[] { 6f, 9f, 12f, 15f })
+		{
+			for (var i = 0; i < 16; i++)
+			{
+				var angle = MathF.PI * 2f * i / 16f;
+				var p = new System.Numerics.Vector3(
+					myPos.X + MathF.Sin(angle) * radius, myPos.Y, myPos.Z + MathF.Cos(angle) * radius);
+				var score = MinDistToPlayers(p, others) - MathF.Max(0f, radius - 12f) * 1.5f;
+				if (score > bestScore) { bestScore = score; best = p; }
+			}
+		}
+		return best;
 	}
 
 	/// <summary>频道简写 → 命令前缀(如 p → /p):优先当前配置(用户改过频道表),兜底默认表。</summary>
@@ -2442,6 +3109,7 @@ public class AuraCanAiCore : IDisposable
 		_config.SetLlmConfig(StripKey(_llmSetting)); // LLM json 不再存 Key(独立存储)
 		_config.Save(_pi);
 		Log($"已保存LLM配置数据: {configJson}");
+		RoleActions?.Reset(); // 角色/动作列表变了:清空待执行动作与冷却
 		ResetChatHistory();
 		return new { message = "LLM配置保存成功", result = "success" };
 	}
@@ -2452,8 +3120,132 @@ public class AuraCanAiCore : IDisposable
 		SyncApiKeyFromConfig(); // 还原角色配置,DeepSeek Key 保留
 		_config.SetLlmConfig(StripKey(_llmSetting));
 		_config.Save(_pi);
+		RoleActions?.Reset();
 		ResetChatHistory();
 		return new { message = "LLM配置已重置为默认(DeepSeek Key 保留)", result = "success" };
+	}
+
+	// ==================== 状态机(HTTP:前端 character.html 顶部视图) ====================
+
+	/// <summary>状态机整体数据(第一层/第二层/动作/路径 + 当前状态 + 位置记录武装)。</summary>
+	public object GetStateMachineJson()
+	{
+		return new
+		{
+			enabled = _config.StateMachineEnabled,
+			currentMoodId = _config.SmCurrentMoodId,
+			currentSceneId = _config.SmCurrentSceneId,
+			moods = _config.SmMoods,
+			roles = _llmSetting.roles.Select(r => r.name).ToList(),
+			armed = new { moodId = State.ArmedMoodId, sceneId = State.ArmedSceneId, name = State.ArmedActionName },
+			currentRole = GetActiveRoleName(),
+			result = "success",
+		};
+	}
+
+	/// <summary>保存状态机(第一层/第二层/动作列表/路径;enabled 也一并接受)。</summary>
+	public object SaveStateMachineJson(string json)
+	{
+		try
+		{
+			var parsed = JObject.Parse(json);
+			var moods = parsed["moods"]?.ToObject<List<SmMood>>() ?? new List<SmMood>();
+			moods.RemoveAll(m => m == null || string.IsNullOrWhiteSpace(m.name));
+			var seen = new HashSet<int>();
+			foreach (var m in moods)
+			{
+				if (m.id <= 0 || !seen.Add(m.id)) m.id = NextFreeId(seen);
+				if (m.scenes == null) m.scenes = new List<SmScene>();
+				m.scenes.RemoveAll(s => s == null || string.IsNullOrWhiteSpace(s.name));
+				var sseen = new HashSet<int>();
+				foreach (var s in m.scenes)
+				{
+					if (s.id <= 0 || !sseen.Add(s.id)) s.id = NextFreeId(sseen);
+					if (s.actions == null) s.actions = new List<IdleAction>();
+					s.actions.RemoveAll(a => a == null || (string.IsNullOrWhiteSpace(a.name) && string.IsNullOrWhiteSpace(a.emote)));
+					if (s.nextSceneIds == null) s.nextSceneIds = new List<int>();
+				}
+				foreach (var s in m.scenes) s.nextSceneIds.RemoveAll(id => m.scenes.All(x => x.id != id));
+			}
+			_config.SmMoods = moods;
+			if (parsed["enabled"] != null) _config.StateMachineEnabled = parsed["enabled"]!.Value<bool>();
+			var mood = _config.SmMoods.FirstOrDefault(m => m.id == _config.SmCurrentMoodId) ?? _config.SmMoods.FirstOrDefault();
+			_config.SmCurrentMoodId = mood?.id ?? 0;
+			var scene = mood?.scenes.FirstOrDefault(s => s.id == _config.SmCurrentSceneId) ?? mood?.scenes.FirstOrDefault();
+			_config.SmCurrentSceneId = scene?.id ?? 0;
+			SaveConfig();
+			State.ResetIdle();
+			ResetChatHistory();
+			Log($"[状态机] 已保存:第一层 {_config.SmMoods.Count} 个;当前 {State.CurrentMoodName}/{State.CurrentSceneName}");
+			return new { message = "状态机已保存", result = "success" };
+		}
+		catch (Exception e) { return new { message = e.Message, result = "error" }; }
+	}
+
+	private static int NextFreeId(HashSet<int> used)
+	{
+		var id = 1;
+		while (used.Contains(id)) id++;
+		used.Add(id);
+		return id;
+	}
+
+	/// <summary>开关状态机(独立 RP 开关;前端手动打开/关闭)。</summary>
+	public object SetStateMachineEnabledJson(string json)
+	{
+		try
+		{
+			var en = JObject.Parse(json)["enabled"]?.Value<bool>() ?? false;
+			_config.StateMachineEnabled = en;
+			SaveConfig();
+			State.ResetIdle();
+			ResetChatHistory();
+			var active = GetActiveRoleName();
+			Log($"[状态机] 已{(en ? "开启" : "关闭")};当前生效角色={(string.IsNullOrEmpty(active) ? "(空,AI 不回话)" : active)}");
+			return new { enabled = en, activeRole = active, result = "success" };
+		}
+		catch (Exception e) { return new { message = e.Message, result = "error" }; }
+	}
+
+	/// <summary>前端手动切换当前状态(第一层/第二层;调试/手动微调用)。</summary>
+	public object SwitchStateMachineJson(string json)
+	{
+		try
+		{
+			var p = JObject.Parse(json);
+			var moodName = p["mood"]?.ToString() ?? "";
+			var sceneName = p["scene"]?.ToString() ?? "";
+			var msg = "";
+			if (!string.IsNullOrWhiteSpace(moodName)) { var r = State.SwitchMood(moodName); if (!r.ok) return new { message = r.message, result = "error" }; msg += r.message + " "; }
+			if (!string.IsNullOrWhiteSpace(sceneName)) { var r = State.SwitchScene(sceneName); if (!r.ok) return new { message = r.message, result = "error" }; msg += r.message; }
+			return new { message = msg.Trim(), result = "success", currentMood = State.CurrentMoodName, currentScene = State.CurrentSceneName, currentRole = GetActiveRoleName() };
+		}
+		catch (Exception e) { return new { message = e.Message, result = "error" }; }
+	}
+
+	/// <summary>武装「记录位置」:前端某动作行点「记录位置」后,游戏内 /aca pos(不带名)写进这条。</summary>
+	public object ArmIdlePosJson(string json)
+	{
+		try
+		{
+			var p = JObject.Parse(json);
+			State.ArmPos(p["moodId"]?.Value<int>() ?? 0, p["sceneId"]?.Value<int>() ?? 0, p["name"]?.ToString() ?? "");
+			var armed = State.ArmedActionName.Length > 0;
+			return new { armed, name = State.ArmedActionName, message = armed ? "已准备记录位置:请到游戏里站好,输入 /aca pos" : "已取消记录位置", result = "success" };
+		}
+		catch (Exception e) { return new { message = e.Message, result = "error" }; }
+	}
+
+	/// <summary>清空某动作的位置(前端「清空位置」)。</summary>
+	public object ClearIdlePosJson(string json)
+	{
+		try
+		{
+			var p = JObject.Parse(json);
+			var msg = State.ClearPosition(p["moodId"]?.Value<int>() ?? 0, p["sceneId"]?.Value<int>() ?? 0, p["name"]?.ToString() ?? "");
+			return new { message = msg, result = "success" };
+		}
+		catch (Exception e) { return new { message = e.Message, result = "error" }; }
 	}
 
 	/// <summary>DeepSeek API Key 独立存储(Configuration.DeepSeekApiKey),同步到运行时 LLM 配置。</summary>

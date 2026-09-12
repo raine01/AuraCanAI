@@ -68,6 +68,55 @@ public class Role
 	public double presencePenalty { get; set; } = 0;
 	public List<string> stop { get; set; } = new();
 	public double temperature { get; set; } = 1;
+	public List<RoleAction> actions { get; set; } = new(); // 供 AI 主动执行的动作列表(与角色绑定;见 RoleAction)
+}
+
+/// <summary>角色自定义动作(与角色绑定,供 AI 主动执行)。执行 = 依次发送「/动作名」与「/em 文字」两条游戏命令(相当于依次执行宏)。</summary>
+public class RoleAction
+{
+	public string name { get; set; } = ""; // 名称:给编辑者做备注用,同时是 AI 引用该动作的标识(为空时回退用「动作」)
+	public string text { get; set; } = ""; // 文字:即 /em 后面的部分(不发 /em 则留空;可用游戏原生占位符如 <t>/<me>/<pos>,发送时由游戏替换)
+	public string emote { get; set; } = ""; // 动作:游戏内表情名(如 抚摸;自动补 /;已带 / 则原样用;留空只发文字)
+	public int cooldown { get; set; } = 0; // 冷却:单位秒(0 = 不限制)
+}
+
+// ==================== 状态机(两层:第一层角色状态 / 第二层情景) ====================
+
+/// <summary>状态机第一层:角色状态/心情(如 心情很糟糕 / 非常开心 / 亢奋 / 受伤中)。
+/// 不同第一层对应不同的第二层情景,角色只能在当前第一层下的几个情景之间切换。第一层由 AI 自由判断切换。</summary>
+public class SmMood
+{
+	public int id { get; set; }
+	public string name { get; set; } = ""; // 显示名(心情很糟糕 / 非常开心 / 亢奋 / 受伤中)
+	public string desc { get; set; } = ""; // 给 AI 的说明:什么时候该处于这个状态
+	public List<SmScene> scenes { get; set; } = new(); // 该状态下的情景(第二层)
+}
+
+/// <summary>状态机第二层:情景模式(待机 / 对话 …)。每个情景绑定一个人设 roleName,并有自己的动作列表。
+/// 切换受路径 nextSceneIds 约束(空 = 同第一层内不限)。</summary>
+public class SmScene
+{
+	public int id { get; set; }
+	public string name { get; set; } = "";
+	public string desc { get; set; } = ""; // 给 AI 的说明
+	public string roleName { get; set; } = ""; // 该情景使用的人设(角色设定里的角色名;空 = 不说话)
+	public List<IdleAction> actions { get; set; } = new(); // 动作列表(名称/动作/冷却/位置)
+	public List<int> nextSceneIds { get; set; } = new(); // 允许切换到同第一层下的哪些情景(空 = 不限)
+}
+
+/// <summary>状态机第二层的动作(待机动作列表):名称 / 动作(游戏表情名) / 冷却(秒,也是自动轮换间隔) / 位置(可空)。
+/// 与 RoleAction 的区别:没有「文字」项,多一个「位置」项(可在游戏内用 /aca pos 导入)。</summary>
+public class IdleAction
+{
+	public string name { get; set; } = ""; // 名称(AI 引用标识 + 冷却/轮换键)
+	public string emote { get; set; } = ""; // 动作:游戏表情名(如 坐下;可空=只走到位置站着)
+	public int cooldown { get; set; } = 0; // 冷却(秒)= 该动作停留多久后自动随机换下一个(0 按 30 秒)
+	public bool hasPos { get; set; } = false; // 是否设置了位置
+	public float x { get; set; }
+	public float y { get; set; }
+	public float z { get; set; }
+	public float yaw { get; set; } // 面向(弧度,0=南)
+	public uint territoryId { get; set; } // 记录位置时所在地区(跨屋防错位)
 }
 
 /// <summary>DeepSeek 请求体</summary>

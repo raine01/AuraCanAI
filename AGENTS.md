@@ -61,6 +61,11 @@ FF14 卫月(Dalamud)插件:AuraCanAI 游戏内 AI 角色扮演助手(本地网�
 - **⚠️ GetCleanName 必须过滤名字前缀图标字符**:`\ue0e1 \ue071-\ue073 \ue090-\ue097`(私用区,12 个)+ `★●▲♦♥♠♣` + 服务器名;漏掉会导致"自己发言被 TTS 播报/网页左右错位"(已踩坑)
 - **回复悄悄话**:网页收到的 0D 消息带 `sender` 字段(回复地址);`SendTellJson` 用 `/t {name} {msg}`;国服 `/t` 强制要求 `名字@服务器` 格式,缺服务器名时自动补本地服务器名(`IPlayerState.HomeWorld`);跨服好友名字带 `@服务器` 用 payload 解析(`PlayerPayload.World.RowId` → World 表)
 - **发消息(勿改回旧方式!)**:`Utf8String.FromString(msg)` → `UIModule.Instance()->ProcessChatBoxEntry(mes, 0, false)` → `mes->Dtor(true)`;必须在游戏框架线程(`IFramework.RunOnFrameworkThread`);**不要**操作输入框 IsActive、**不要** saveToHistory=true(会崩游戏);已移除 ACT/PostNamazu 方案,勿恢复
+- **触发宏(MacroExecutor,2026-09-11 重写)**:`UIModule.Instance()` → 宏模块 `GetMacro(set, index)`(set 0=个人宏 1=共享宏) → `ShellModule->ExecuteMacro(macro)`;执行前查 `ShellModule->MacroLocked`(忙则不触发)。
+  ⚠️ **子模块指针严禁硬编码偏移**:曾用 `(byte*)ui + 0x61B0 / + 0xB9B30`(CS 7.51 布局),游戏更新后 RaptureShellModule 偏移变 `0xB9B50`,偏移错 0x20 字节 → `MacroLocked` 读到脏数据恒 true → **所有宏触发都被当「执行器忙」丢弃**(表象:注视提示有了、行为提示没有、宏不执行;队列超时丢弃还是静默的,日志几乎无痕)。
+  现取法:优先 `ui->GetRaptureMacroModule()` / `ui->GetRaptureShellModule()`;为 null 时回退到「运行时反射 `FieldOffsetAttribute` 得到的偏移」(随 CS 包自动适应,仍不是写死数字)。
+  诊断命令:`/aca macrodia [N]` 打印 ui/macroModule/shell 指针、`MacroLocked`、宏是否为空与行数;`/aca macro N` 失败时自动附诊断文本;行为触发失败/队列超时也都会带上诊断。
+  (同类风险:`Movement/MovementOverride.cs` 的 `CameraEx` 用了 `FieldOffset(0x140)` 写死相机方位角偏移,仅 legacy 移动模式用、失效时会走错方向,待换成 CS `Camera` 结构)
 - **玩家进出/注视**:ObjectTable 轮询差异(500ms 定时器),回调必须包 `RunOnFrameworkThread`(否则 "Not on main thread!");玩家判断 `ObjectKind.Pc`,排除自己用 `GameObjectId`;注视者存 `_targetMePlayers`(playerId+name),`IsLookingAtMe(entityId)` 供活点地图用
 - **附近玩家数据**:遍历 ObjectTable,`IPlayerCharacter`(命名空间 `Objects.SubKinds`)的 `Customize[0]`=种族、`Customize[1]`=性别、`HomeWorld`=服务器名、`OnlineStatus.RowId`=状态;状态中文名/RowId 反查用 `GetOnlineStatusId(name)` 缓存
 - **ImGui**:命名空间 `Dalamud.Bindings.ImGui`(不是 ImGuiNET);TabBar/Table/DrawList 均可用
@@ -104,16 +109,18 @@ say t 龙尾轻轻摇@红玉海 在吗? when in_housing
 - 连接:`when and or not`;**独立 `not` 词也作为隐式 and 分割**(`looking_player = 龙尾轻轻摇 not in_combat` = 三个条件,不必写 and);⚠️ **not 作为连接词时其后条件必须取反(已修):曾 bug——not 被 ConnRe 剥离后 in_party 变成正条件,导致 `not in_party` 实际=in_party,行为方向与定义相反**(症状:单人时 not in_party 条件不满足、组队反而满足;IsInParty 数据本身是对的,勿再改它);比较:`= != >= <=`(旧 `==` 语法兼容,值前多余的 = 自动去掉;contains 已移除)
 - 冷却:`cooldown N` 秒,默认 20,0=无冷却(**必须无等号**,如 `cooldown 30`;`cooldown = 30` 会报错——曾踩坑,cooldown 关键字存在但格式不对时直接报错,避免混进条件值);触发 = 边沿触发(不满足→满足时一次)+ 冷却期内不重复
 - **「离开时不触发」「战斗中不触发」**(BehaviorItem.skipOnLeave / skipOnCombat,均默认勾选):我的状态为「离开」(IsPlayerAway,OnlineStatus 中文名 == "离开")或战斗中(IsInCombat)时该行为直接丢弃(不触发、不设冷却、状态照常更新);丢弃时日志 + (勾了聊天内提示) /e 提示原因
+- **「角色扮演限制」**(BehaviorItem.rpMode,枚举 `BehaviorRpMode`:NoLimit=0 默认 / RpOnly=1 仅角色扮演时触发 / RpSkip=2 角色扮演时不触发;编辑区下拉框选择):**「角色扮演中」= 前端网页「角色设定」页已选中当前角色**(`LLMConfig.currentRole` 非空,core.IsRolePlaying 纯配置读取,与游戏 OnlineStatus「角色扮演中」无关——曾误用在线状态,已改);不满足时与「离开/战斗中」同一条丢弃路径(不触发、不设冷却、状态照常更新);解析链 Parse → ParseSegment → BehaviorRule.RpMode,运行时在 Engine.Tick 的顺序为 need → 离开 → 战斗 → 角色扮演
 - 条件库:`looking_player`(看我的玩家名,=/!=)、`anyone_looking`、`looking_player_count`(数值)、`area`(PlaceName 中文名)、`in_housing`、`room_size`(S/M/L/公寓,取住宅代码首字母)、`my_status`(OnlineStatus 中文名)、`in_party`(FFXIVClientStructs GroupManager,国服无 IGroupManager 服务)、`my_job`(ClassJob 表中文名,失败回退 Abbreviation)、`nearby_player_count`(数值)、`target_name`(当前选中目标)、`time`(现实时间 HH:mm,>=/<=)、`anyone_emote_to_me`(有人刚对我做表情,布尔)、`emote_to_me_player`(刚对我做表情的玩家名,=/!=)、`emote_to_me_name`(表情名,游戏内中文名如 摸头,=/!=)
 
 **实现**:
 - `Core/Behavior/BehaviorParser.cs`:定义文本 → 规则(纯逻辑,无 Dalamud 依赖);`BehaviorParseResult.Errors` 含段号,UI 红字显示;trigger 宏列表按逗号解析(每项 s?N,0-99 校验),after 支持 A,B 区间(校验 A≤B、非负,残缺写法如 after 3, / after 3,x / after when 给出专属报错,避免误报成宏编号错误);say 解析(频道/内容,频道表+变量表以 BehaviorSyntaxDoc 为单一数据源,未知频道/未知变量均报错);**BuildSayText(纯静态):变量替换 + 空变量跳过 + t 目标解析(内容开头 名字@服务器(不含变量)否则默认 last_tell),引擎仅传变量值回调**
 - **AI 生成行为命令**(`AuraCanAiCore.GenerateBehavior` → DeepSeek function calling 调 generate_behavior):**结构化模式(2026-08 重构,推荐路径)**:tool 参数为 `{comment, rules[]}`,每条 rule 含 action/macros/channel/text/target/after/afterMax/cooldown/when(条件数组)/connectors/need;程序用 `BehaviorParser.AssembleRule` **拼装规范文本**(动作 → after → when → need → cooldown),LLM 只填值不碰语法 → 杜绝文本乱序/拼错/条件名拼错(拼装时校验动作/宏 0-99/频道/条件名(支持去下划线模糊匹配)/数值/时间,任一规则失败整体报错重试)。**兼容回退**:LLM 未按结构返回时走旧 definition 文本路径 → `FormatBehaviorDefinition`(分号与换行都视为规则分隔,逐段 `NormalizeSegment` 按规范顺序重建,解析失败保留原文由保存时报错)。**勿改回宽度折行**(曾踩坑:折行把条件值拦腰截断,如 emote_to_me_name = 抚摸 被折成 抚⏎摸,保存报"无法解析";单条长规则在输入框内横向滚动即可)
-- `Core/Behavior/BehaviorEngine.cs`:500ms 轮询(挂 core 的 _timer500),边沿触发+冷却;动作调度(Schedule:say 直接执行(带 after 走 _delayed),look/after 走 _delayed 延迟列表,多宏 trigger 入 _chains 连发链,单宏 trigger 无延迟走 _queue);**多宏链**(MacroChain):执行完前一个(等 MacroExecutor.IsBusy 释放)再执行下一个,间隔 ChainGapMs=300ms,单宏失败不阻塞,300 秒防卡死;**_macroFiredThisTick 全局限制每 tick 最多触发一个宏**(延迟/队列/链共用,防同帧连发);ExecuteAction 分发 Trigger(单宏直接触发/多宏入链)/Say(ExecuteSay:BuildSayMessage → BehaviorParser.BuildSayText(变量替换/空跳过/t 目标) → core.SendBehaviorSay)/Look(选中目标),触发日志留痕;条目勾选「聊天内提示」→ /e 提示(发言成功/跳过/失败均有提示)
+- `Core/Behavior/BehaviorEngine.cs`:500ms 轮询(挂 core 的 _timer500),边沿触发+冷却;动作调度(Schedule:say 直接执行(带 after 走 _delayed),look/after 走 _delayed 延迟列表,多宏 trigger 入 _chains 连发链,单宏 trigger 无延迟走 _queue);**多宏链**(MacroChain):执行完前一个(等 MacroExecutor.IsBusy 释放)再执行下一个,间隔 ChainGapMs=300ms,单宏失败不阻塞,300 秒防卡死;**_macroFiredThisTick 全局限制每 tick 最多触发一个宏**(延迟/队列/链共用,防同帧连发);ExecuteAction 分发 Trigger(单宏直接触发/多宏入链)/Say(ExecuteSay:BuildSayMessage → BehaviorParser.BuildSayText(变量替换/空跳过/t 目标) → core.SendBehaviorSay)/Look(选中目标),触发日志留痕;条目勾选「聊天内提示」→ /e 提示(发言成功/跳过/失败均有提示)。
+  **重载预热与超时可见性(2026-09-11 补)**:Reload 后首次 Tick 会把「当时已满足」的条件视为已触发并丢弃动作(`_warmingUp`,防重载后全部重跑)——刚保存行为就想测会看到什么都不发生,现在这种丢弃也会发 /e 提示(仅 warm、且勾了聊天内提示);队列超时丢弃不再静默(带 `MacroExecutor.Diagnose` 原因 + /e 提示);宏执行器持续忙 >15s 且距上次告警 >60s 时输出一条诊断日志
 - `Core/AuraCanAiCore.cs`:TryLook/FindPlayerByName(清洗名精确匹配,IGameObject 在 `Dalamud.Game.ClientState.Objects.Types` 命名空间)/GetLatestLookingPlayer 供 look 动作使用;**SendBehaviorSay(简写→cmd:优先当前 channelConfig 配置,兜底 SyntaxDoc.SayChannels)→ RunCommand 发送**
 - `Core/Behavior/BehaviorModels.cs`:BehaviorItem 用 public 字段(ImGui ref 绑定)+ 每字段 [JsonProperty](Json.NET 不默认序列化字段)
 - 持久化:`Configuration.Behaviors`(List<BehaviorItem>),UI 增删改/启停 → `core.SaveBehaviors()`(保存 + 引擎 Reload,Reload 重置运行时状态)
-- UI:`Windows/DashboardWindow.cs` 第四页签,列表 = 序号(自动分配,删除复用最小空缺)/注释/启停勾选/编辑按钮;编辑区**内联在列表上方**(与回忆检索同交互,勿用 BeginPopupModal/OpenPopup —— 本 ImGui 绑定下 popup 打开无效,已踩坑回退),内容 = 注释 + 多行定义 + 聊天内提示 + 保存/删除/取消;保存失败红字;编辑区勾选项顺序:**「离开时不触发」「战斗中不触发」(均默认勾选)在「聊天内提示」前面**
+- UI:`Windows/DashboardWindow.cs` 第四页签,列表 = 序号(自动分配,删除复用最小空缺)/注释/启停勾选/编辑按钮;编辑区**内联在列表上方**(与回忆检索同交互,勿用 BeginPopupModal/OpenPopup —— 本 ImGui 绑定下 popup 打开无效,已踩坑回退),内容 = 注释 + 多行定义 + 聊天内提示 + 保存/删除/取消;保存失败红字;编辑区勾选项顺序:**「离开时不触发」「战斗中不触发」(均默认勾选)在「聊天内提示」前面**;最后是「角色扮演限制」下拉(仅角色扮演时触发/角色扮演时不触发/不做限制,默认不做限制)
 - 条件数据源在 `AuraCanAiCore.cs`(GetPlayersLookingAtMe/GetAreaName/GetMyStatusName/GetMyJobName/GetRoomTypeName/IsInParty/GetNearbyPlayerCount/GetTargetName/ChatNotice)
 - **表情触发条件(anyone_emote_to_me / emote_to_me_player / emote_to_me_name,2026-08 新增)**:`ScanEmotes()`(500ms,框架线程,挂 CheckLookingAndPlayers 末尾)扫附近玩家 `BattleChara* → EmoteController`(`Character+0x630`:EmoteId @+0x14 ushort、Target.ObjectId @+0x18 uint;FFXIVClientStructs 7.51.0.8870 布局,勿手写偏移,直接结构体访问)。严格判定「对我做」= `Target.ObjectId == LocalPlayer.GameObjectId`;边沿检测:EntityId→上次 EmoteId 字典(`_lastEmoteId`),EmoteId 从 0/其他值变为新值记一次事件(首次见到只记录不触发;循环表情只记开始);事件记 3 秒窗口(`AnyEmoteToMeRecently`),同时更新 `_lastEmoteUser/_lastEmoteName/_lastEmoteTime/_lastContactUser`;表情名取 Lumina `Emote` sheet 中文名(EmoteId 即 RowId,失败回退 `#编号`)。**仅系统内置表情播放动画,`/em` 自定义文本宏不播放动画天然不触发;但宏里写系统表情命令(如 /摸头)同样播放动画会触发(游戏层无法区分,已向用户说明)**。⚠️ 待实机验证:`Target` 是否在表情菜单对目标使用时正确写入。离场清除/切区域重置已覆盖。
   **⚠️ 语义坑(实测踩坑)**:`emote_to_me_player`/`emote_to_me_name` 是**持续状态**(记录最后事件,不自动复位),行为引擎边沿触发 → 单独使用只在状态从不满足→满足时触发**一次**,之后 WasTrue 保持 true 不再触发(症状:第一次生效、之后每次摸都没反应)。**必须搭配事件窗口 `anyone_emote_to_me`(3 秒)**:如 `when anyone_emote_to_me and emote_to_me_player = X and emote_to_me_name = 抚摸`。AI 生成提示(BehaviorSyntaxDoc.BuildGenPrompt)已内置此规则;勿把 emote_to_me_* 改成自动复位(发言变量 {emote_player}/{emote_name} 需要保留最后事件信息)。
@@ -239,6 +246,88 @@ XivChatType 十六进制两位 = 频道号:0A=说话 /s、0E=小队 /p、18=部�
 3. 若某动作目标名在场景里(不同服务器显示名差异)→ 模型应使用注入的在场名单(注意名字@服务器跨服场景);
 4. 结束后台逻辑:face 只是 TryLook(选中→自动面向),不移动;stop 立即停;被家具挡/走丢由 MovementController 结束并注入给模型;
 5. 若 DeepSeek 对 tools 支持异常(返回格式怪)→ 检查 BODYRSP 日志,可回退关掉身体模式。
+
+## 角色自定义动作(AI 主动做动作,2026-09-11,待实机验证)
+
+**需求口径(用户)**:前端「角色设定 → 角色管理」里给每个角色加一份**供 AI 使用的动作列表**;每个动作四列:名称(备注 + AI 引用标识)/ 文字(`/em` 开头那部分)/ 动作(游戏内表情名)/ 冷却(秒)。AI 可主动执行;动作与角色绑定;本质上是依次执行宏。
+
+**实现**:
+| 位置 | 内容 |
+|---|---|
+| `Models.cs` | `Role.actions`(列表)+ `RoleAction { name, text, emote, cooldown }`(小写字段名,与前端 JSON 对应)。**冷却不进配置**(内存态,避免被前端保存覆盖) |
+| `Core/RoleActionPlayer.cs` | 执行器:一个动作 = 依次发两条游戏命令(`/动作名` → `/em 文字`,已带 `/` 则原样),步间隔 StepGapMs=300ms,由 core 的 500ms tick 泵送(一次一步);队列上限 3;冷却键 = `角色名\u0001动作展示名`;`PerformByName` 返回中文结果描述给模型 |
+| `Core/AuraCanAiCore.cs` | 工具 `rp_emote`(仅在角色有动作时加入 tools,enum = 动作名;描述里写清每个动作的表情/文字/冷却);工具分发在 `RunInfoToolCore` case `"rp_emote"`;`rp_emote` 归入 `infoCalls`(执行后回填结果并继续循环,模型可接着说话——不像 rp_body_action 那样强制补台词轮);系统提示追加 `BuildRoleActionRule`(动作表 + 用法:动作不写进台词、冷却中别重复调、可动作+台词同回合;**执行成功只回 "成功"**,因为动作自身已不再回显进历史,模型不需要额外描述);`GetRoleActions/GetCurrentRoleName` 为公开入口 |
+| `Web/character.html` | 角色编辑区新增「动作列表（AI 可主动执行）」:动态行(名称/文字/动作/冷却秒/删除)+「添加动作」按钮(事件委托一次绑定);渲染与保存分别走 `buildActionRows/actionRowHtml` 与 save 里的 `.action-item` 遍历(三个字段全空的行忽略);`escAttr` 转义属性值 |
+| `Plugin.cs` | `/aca action [名称]`:不带名称 = 列出当前角色动作;带名称 = 直接做一次(测试用,与 AI 走同一路径) |
+| `Web/help.html` | 新增「AI 动作(自定义表情)」帮助节 |
+
+**注意/约定**:
+- **表情命令仅在填了文字时补「动作」/「motion」子命令**(`RoleActionPlayer.BuildEmoteCommand(emote, hasText)`,2026-09-11 用户口径修正):不加的话 `/<表情名>` 会先出一条游戏官方表情提示,再加 `/em 文字` 的提示 = **游戏里两条提示**;补子命令(只播动作)后只留 `/em` 一条。关键字本地化:**表情名含中日文字符 → 「 动作」,否则(英文命令如 pet)→ 「 motion」**;命令里已带参数(含空格)时原样使用不重复补。→ **没填文字就不补**,保留游戏官方表情文字(否则聊天栏什么都不显示)。
+- **前端会展示补完后的样子**(`character.html` 的 `composeCommands`/`refreshActionPreview`):每行动作下面显示「实际发送:(换行)每条命令一行」,输入时实时刷新(`input change` 事件委托);两个字段全空时显示「保存时会忽略这一行」。⚠️ **这是 BuildSteps 规则的 JS 副本,改后端规则要同步改 JS**(后端 `BuildSteps`/`DescribeCommands` 同理)。
+- **动作类频道(1C 原创动作 / 1D 情感动作)的采集口径(2026-09-11 用户口径,勿改回)**:
+  - **对方的动作不进聊天历史**:存成 `_pendingActionHints`(带时间戳),由 `TakePendingActionHints()` 在下一次请求里以 **system 消息**注入一次,立即清空 → **只存在一轮**;TTL 20 秒(过期丢弃,不让旧动作跑到很久之后的对话);有可回复的普通文本频道时顺带触发一次回应(`NotifyActionHint` → `NotifyChatTurnPending(_lastSpeakChannel, _lastSpeakAddr)`)。
+  - **自己的动作直接丢弃**:1C/1D 且 isOwn → 直接 return(不入历史、不回显、不触发)。⚠️ **原来是把自身动作以 "(动作)" 形式当 assistant 台词入库**,模型会照猫画虎在台词里写括号动作(2026-09-11 用户实测);同时删了已废弃的 `_lastLlmEcho*` 回显去重字段。
+  - 采集/播报/网页仍照旧(只有 LLM 历史路径改了)。
+- **台词里的括号动作会被过滤**(`AuraCanAiCore.StripBracketActions`,在 AppendAssistantAndEcho 里做):模型偶发在台词里写「(轻轻点头)」「*叹气*」(加了动作列表后更容易) → 先反复剔除最内层成对括号(全半角/【】/〔〕等 10 对,最多 3 轮处理嵌套),再清残留单个括号与星号;**整句都是描写 → 不发那条**(日志记「台词被过滤」)。Prompt 侧 OutputFormatRule + 动作工具描述里也加了硬规则。
+- 动作只在选了当前角色(有 setting)时才有意义(无角色则不回复也不触发工具);文字/动作都是**游戏原生指令原文**(`/表情名` 与 `/em 文字`),所以游戏占位符(`<t>` 当前目标、`<me>` 自己、`<pos>` 坐标等)天然可用,发送时由游戏替换——插件**不做**任何转义/替换;保存/重置角色配置时 `RoleActions.Reset()` 清空队列与冷却;`/em` 原文动作会进游戏聊天日志,但自己发言会被清洗名过滤掉(不会回声循环)。
+
+## 网页两个「还原默认」的作用范围(2026-09-11 核对)
+
+| 页面 | 按钮 | 接口 | 重置什么 |
+|---|---|---|---|
+| 角色设定(character.html) | 保存角色设定 / **还原默认角色设定** | POST `/SaveLLMConfig` / `/DeleteLLMConfig` | 只重置 `Configuration.LlmConfigJson`:`currentRole`→空(不使用人设,AI 不回话)、`roles`→只剩默认「白屿涟音」(含 `actions` 动作列表一起丢)。副作用:`ResetChatHistory()` + `RoleActions.Reset()`。**DeepSeek Key 保留**(独立字段 `Configuration.DeepSeekApiKey`) |
+| 消息设置(setting.html) | 保存所有配置 / 还原默认配置 | POST `/SaveConfig` / `/DeleteConfig` | 只重置 `Configuration.MessageSettingsJson`:`privacyMode`、`keywords`、`blockwords`、`defaultFilePath`(→./chatlogs)、`logPeriod`(→每天)、`weekStartDay`(→周一)、`channelConfig`(→默认频道表,播读/记录/AI 采集开关全回默认)。运行时 `_msgSetting` 直接替换 → 即时生效 |
+
+- 两个「还原」互不影响:**不重置** 场景设定(Seats/Obstacles/Houses)、行为设置(Behaviors)、玩家备注(PlayerNotes)、歌单(Playlists)、TTS(开关/音量/语速/并发)、网页端口、LLM 回复节奏、移动参数、DeepSeek Key。
+- 场景设定是**编辑即自动保存**(saveHouses/saveSeats/saveObstacles 各自单独接口),不走页面的保存按钮——所以 character.html 的保存按钮只对「角色设定」有效,已更名为「保存角色设定」并移入角色设定节内。
+
+## 小队解散清理 + AI「离开」(2026-09-11 用户口径,已实现待实机验证)
+
+### 1. 小队解散/退出 → 清空上下文与动作队列
+- `CheckPartyStateTick()`(500ms tick,挂在 `_timer500`):记录 `_wasInParty`,检测到 **在小队 → 不在小队**(解散/退队/被踢)→ **先判 RP 条件**:`IsRolePlaying()`(前端「角色设定」选中了当前角色)为真才清;未选角色(非 RP 模式)只复位 `_leaveArmed` 并记日志,**不清上下文**。
+- RP 中则依次做:`ResetChatHistory()`(清聊天上下文并重建 system 提示) → `RoleActions.Reset()`(清待执行动作与冷却) → 清 `_pendingActionHints` → `_replyPending=false` → 清 `_lastSpeakChannel/_lastSpeakAddr` → `_leaveArmed=false`。
+- ⚠️ 副作用(已知且接受):打完本/退了集合队伍也会触发清空(只要从小队变单人)。加入小队不清。
+
+### 2. 新工具 `leave_scene`(「离开」)
+- **AI 侧**:工具无参数;描述“告辞/结束互动/不想被围观时用”;归入 `infoCalls`(执行→回填结果→继续循环,模型可再说一句告别)。`RunInfoToolCore` case `"leave_scene"` → `LeaveScene()`。场景提示里也加了“想告辞用 leave_scene”。
+- **行为**(`LeaveSceneCore`,框架线程):
+  1. 正在进行移动 → 先 `Movement.Stop()`(离开优先);然后 **`ClearLook()` 移开目光**(`TargetManager.Target=null` + `SoftTarget=null`,不看任何人也不看自己——“走开之前先移开目光”用户口径);
+     P.S. `TryLook` 已加“不选中自己”防护(`FindPlayerByName` 同名时会返回自己);
+  2. 在小队则 `_leaveArmed=true` + 重置倒计时;不在小队则只走位/坐("无需退队");
+  3. 找「人少处的空座」(`FindQuietSeat`:当前房子+当前楼层、`!IsSeatOccupied`、离最近其他玩家 >= 4m,取离自己最近的)→ `Movement.SitOnSeat("#id")`;
+  4. 没座且最近的人 < 10m → `PickQuietPoint`(以自己为中心 6/9/12/15m × 16 方向环形采样,打分 = 离最近人的距离,超过 12m 每米扣 1.5,避免跑到天边)→ `Movement.MoveToPoint`;
+  5. 已经很空(>=10m)且无座 → 原地不动。
+- **60 秒静默自动退队**:在 `OnChatMessage` 里 **任何他人发言**(不管频道/是否采集)重置 `_leaveLastChatAt`(自己的话不算);`CheckLeavePartyTick()`(500ms)到 60 秒 → `LeavePartyNow()`。
+- **退队实现**:`InfoProxyPartyMember.Instance()->LeaveParty()`(FFXIVClientStructs,**不依赖聊天命令文本/本地化**,比 `/pcmd leave` 稳);失败会记日志(返回 false = 不在小队/状态不允许)。
+- **测试命令**:`/aca leavescene`(走「离开」流程)、`/aca party leave`(立即退队)、`/aca party`(小队状态)。
+
+## 对话上下文两个“坑”修复(2026-09-11 晚,用户看日志发现)
+
+### 1. assistant 每条重复两遍(自身回显没去重)
+- 现象:`/xllog` 的 BODYREQ 里每条 assistant 台词连着出现两遍(模型看到自己在复读)。
+- 根因:`AppendAssistantAndEcho` 已经把台词写进 `_chatHistory`,而台词发出后会被 `ChatGui.ChatMessage` 回显回来 → `ChatLLMHandler` 的 `isOwn` 分支又 `SendMsg(text, "assistant")` 写一遍。
+- 修复:**恢复 `_lastLlmEchoContent/_lastLlmEchoAt` 25 秒去重**(上一轮改动作采集口径时被我误删,它当时实际同时保护着普通文本频道)。注意 1C/1D 自身动作仍然直接丢弃(两件事别搞混)。
+- ❗ 改动这条路径时务必同时验证“台词不会双写历史”和“自身动作不入历史”。
+
+### 2. 注入的 system 提示词只保留最后一条
+- 现象:一个请求里出现 3 条 system(人设卡/场景/补台词指令),实测症状:叫角色“往边上挪挪”时她什么都不做(选了 `rp_body_action(stop)` 后只说了句话)。
+- 修复(`AuraCanAiCore`):
+  - `SnapshotHistoryWithScene` → 重写为 **`BuildTurnMessages(manyMsgs, extraInstruction)`**:把“攼多条提醒 + 场景 + 现场动作提示 + 额外指令”**合并成一条 system**,并用 `copy.Add(...)` **拼在消息末尾**(以前是 `Insert(Count-1)` 插在最后一条 user 之前)。
+  - 新增 `AppendToLastSystem(msgs, text)`:把“本轮额外指令”**并进最后一条 system**(没就追加)。补台词轮、工具调用泄漏纠正轮、非中文重试都已改用它;`BuildRequestMessages`(无人设纯文字路径)也改成拼到末尾。
+  - 结果:除历史里的**人设卡(第 0 条 system,持久 persona 锚点)**,一个请求里只会有**最后一条**注入的 system。
+  - 工具轮特殊:`msgs.Add(asst)` + `tool` 结果会接在那条 system 之后(工具结果必须在最后)。
+- ⚠️ 新增任何“往请求里塞提示”的代码,一律用 `AppendToLastSystem` / `BuildTurnMessages(extraInstruction:)`,**不要再 `msgs.Add(new JObject{role="system"})`**。
+
+### 3. 附带:让开类指令别再选 stop
+`rp_body_action` 描述里加了:“对方说‘让一让/挪一挪/别挡着/借过’→ 用 leave(target=对方) 或 leave_scene,**不要用 stop**(stop 只是终止移动,不会真的让开)”。
+
+### 4. 排查工具:`tools/inspect-bodyreq.js`
+```bash
+node tools/inspect-bodyreq.js        # 看最后 3 条 BODYREQ 的 message 列表(自动标出重复项 / system 过多)
+node tools/inspect-bodyreq.js 10     # 看最后 10 条
+node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] 全文
+```
+它从 dalamud.log 抽 BODYREQ,自带括号配平切数组(整条 JSON 只有工具描述处的小毛病也能解析)。
 
 ## 采集与身份链路契约(2026-09-04,勿破坏)
 
@@ -417,3 +506,49 @@ XivChatType 十六进制两位 = 频道号:0A=说话 /s、0E=小队 /p、18=部�
 - 前端 Web 文件改动需 dotnet build(复制到 bin)+ 插件禁用/启用生效。
 - BODYREQ/BODYRSP/寻路日志在 %AppData%XIVLauncherCNdalamud.log。
 - 占用/判定半径等小常量若实机发现不对,先问用户口径再改,勿自作主张调阈值。
+
+# ===== 两层状态机(2026-09-12 新增,待实机验证) =====
+
+用户口径:**不用三层,改两层**;全局多套(非按角色);第一层随便切、第二层受路径约束;待机动作按冷却自动轮换;位置不要复用场景设定的座位;第一层纯 AI 判断;位置记录「带名」与「先武装再录」都要。
+
+## 数据模型/配置(Models.cs + Configuration.cs)
+- `SmMood`(第一层=角色状态/心情:id/name/desc/scenes)、`SmScene`(第二层=情景:id/name/desc/**roleName(该情景的人设)**/actions/**nextSceneIds(路径)**)、`IdleAction`(name/emote/cooldown/**hasPos,x,y,z,yaw,territoryId**)。全部 camelCase(与前端直接对应)。
+- `Configuration`: `StateMachineEnabled`(独立 RP 开关)、`SmCurrentMoodId`、`SmCurrentSceneId`、`SmMoods`(第一层列表,内含情景)。
+
+## 核心(Core/StateMachine.cs)
+- `SwitchMood` 自由切;`SwitchScene` 必须在当前第一层内,且 `nextSceneIds` 非空时只允许列出的(空=同第一层不限)。切换后 `SaveConfig` + `ResetIdle` + `ResetChatHistoryPublic`(换人设必须重建 system)。
+- `Tick()`(挂 500ms `_timer1500` 链路):当前动作停留满 cooldown 秒 → 随机换同情景另一个动作(只有一个就保持);有位置先 `Movement.MoveToPoint`,到达(`!Movement.IsActive`)后再播表情;动作轮换间隔 = max(3, cooldown 或 30),**必须调用 `RoleActions.Perform(role, ra, ignoreCooldown:true)`**,否则会被角色动作冷却拦住。
+- `PerformIdleAction(name)`:AI 工具/手动指定动作。
+- 位置记录:`ArmPos(moodId,sceneId,name)` 武装 → 游戏内 `/aca pos`(不带名);`/aca pos 动作名` 直接按名找(先当前情景,再全局)。写入后 `SaveConfig`。
+  武装不落盘(内存态),重启失效,正常。
+
+## RP 开关重构(重要)
+- 新增 `AuraCanAiCore.GetActiveRoleName()`:状态机开 → `State.CurrentSceneRole`;关 → 旧 `LLMConfig.currentRole`(兼容旧配置)。**全项目所有“当前角色”解析都改走它**(SendMsg 触发判定 / FireReply / NotifyActionHint / rp_emote / ResetChatHistory / GetCurrentRoleName)。
+- `IsRolePlaying()` 改为 `GetActiveRoleName() 非空`;行为引擎 rpMode 条件随之。
+- 顶部「当前角色」下拉保留:状态机关闭时仍用它。
+
+## AI 工具(加进 infoCalls 回填循环,勿只当纯动作)
+- `switch_mood(mood)`(enum=全部第一层名)、`switch_scene(scene)`(enum=当前第一层内允许的情景)、`rp_idle_action(name)`(enum=当前情景动作名)、`party_action(op,target)`(invite/accept/leave)。
+- 这四个都加进了 `ProcessBodyReplyAsync` 的 infoCalls 白名单,并在 `RunInfoToolCore` 有 case;`LooksLikeToolLeak` 也加了名字。
+- 场景注入(`BuildSceneSnippetCore` 末尾)追加 `State.DescribeStateForAi()`:当前第一层/第二层/人设/可切换情景/动作列表;并新增「队伍:在小队/一个人」。
+- 小队变化事件:新增 `_pendingSystemHints` + `PushSystemHint()`,在 `CheckPartyStateTick` 里进队/退队各推一条,`BuildTurnMessages` 注入一轮(与 `_pendingActionHints` 同 TTL 20s);提示模型据此 `switch_mood`/`switch_scene`。
+
+## 组队 API(FFXIVClientStructs,元数据挖出,**待实机验证**)
+- 邀请:`InfoProxyPartyInvite.Instance()->InviteToPartyContentId(ulong contentId, ushort worldId)`;同副本另有 `InviteToPartyInInstanceByEntityId(uint)`;失败回退 RunCommand `/invite 名字@服务器`。
+- 接受:`RespondToInvitation(string inviter, bool accept)`,邀请人读 `InviterName` / `InviterNameWithHomeworld`(先试前者,失败再试后者)。`EntryCount==0` = 没有邀请。
+- 退队沿用 `InfoProxyPartyMember.LeaveParty()`。
+- 入口 `AuraCanAiCore.PartyAction(op,target)`;命令 `/aca party [leave|invite 名字|accept]`。
+
+## HTTP / 前端
+- 接口:`GetStateMachine` / `SaveStateMachine` / `SetStateMachineEnabled` / `SwitchStateMachine`(body {mood?,scene?}) / `ArmIdlePos` / `ClearIdlePos`(HttpServer 已注册)。
+- 前端 `Web/character.html` **顶部新增「状态机」区块**(在角色设定上方,不新开页):启用开关(独立 RP 开关)、当前状态徽章(轮询 2s 只更新徽章)、第一层页签、第二层页签、情景编辑(名称/说明/人设下拉/路径勾选/动作列表「名称/动作/冷却/位置」)、位置「记录位置(武装)/清空」、编辑即自动保存(防抖 600ms)+「保存状态机」按钮。
+- 路径语义写死在 UI:**都不勾 = 同状态内不限**。
+- help.html 新增「状态机(两层)」帮助节。
+- ⚠️ 前端改完必须 `dotnet build`(Web 复制到 bin)+ 插件禁用/启用生效;JS 语法用 `node --check` 抽 `<script>` 检查过。
+
+## 待实机验证点
+1. 开启状态机 + 某情景选人设 → AI 应能回话(不再看「当前角色」);切情景后人设/记忆应重建。
+2. `switch_mood` / `switch_scene` 工具调用是否被模型正确触发(日志 `[状态机] 第一层/第二层 →`);路径限制是否生效。
+3. 待机动作自动轮换:cooldown 到点换动作;有位置应先走位再表情;`/aca idle 名称` 手动测。
+4. `/aca pos` 记录位置(带名 / 先武装)是否落到正确动作并能在网页显示(点「刷新」)。
+5. `/aca party invite 名字`、`/aca party accept`:**InviteToPartyContentId / RespondToInvitation 的签名/参数语义必须实测**;失败看 xllog `[组队]` 行,必要时改回纯命令方案。

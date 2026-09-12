@@ -39,6 +39,35 @@
 	<form id="configForm" method="post">
 		<main class="main">
 			<div class="container py-5">
+				<!-- 状态机(两层:第一层角色状态 / 第二层情景;放在角色设定上面) -->
+				<section class="settings-section">
+					<h2 class="heading h3 mb-4 border-bottom pb-2">状态机</h2>
+					<div class="card">
+						<div class="card-body" id="smRoot">
+							<div class="d-flex align-items-center flex-wrap mb-2">
+								<div class="custom-control custom-switch mr-3">
+									<input type="checkbox" class="custom-control-input" id="smEnabled">
+									<label class="custom-control-label" for="smEnabled">启用状态机（角色扮演开关）</label>
+								</div>
+								<span class="badge badge-secondary mr-2" id="smCurrentBadge">—</span>
+								<button type="button" class="btn btn-sm btn-outline-secondary mr-2" id="smRefreshBtn">刷新</button>
+								<button type="button" class="btn btn-sm btn-success" id="smSaveBtn">保存状态机</button>
+								<span class="small ml-2" id="smStatus"></span>
+							</div>
+							<div class="toggle-description mb-3">
+								两层状态机：<b>第一层 = 角色状态</b>（心情很糟糕 / 非常开心 / 受伤中…，由 AI 自由切换）；<b>第二层 = 情景</b>（待机 / 对话…，只能在当前第一层内、且按你设定的路径切换）。
+								每个情景绑定一个人设，并有自己的动作列表；动作会按「冷却」秒数自动随机轮换（有位置的会先走过去）。
+								<b>启用状态机后，角色扮演开关就是它</b>（不再看下面的「当前角色」）；关闭则回退到「当前角色」。
+								位置：点某行的「记录位置」，再去游戏里站好输入 <code>/aca pos</code>（或直接 <code>/aca pos 动作名</code>）。
+							</div>
+							<div id="smMoodBar" class="mb-2"></div>
+							<div id="smMoodEditor"></div>
+							<div id="smSceneBar" class="mb-2 mt-3"></div>
+							<div id="smSceneEditor"></div>
+						</div>
+					</div>
+				</section>
+
 				<!-- LLM配置部分 -->
 				<section class="settings-section">
 					<h2 class="heading h3 mb-4 border-bottom pb-2">角色设定</h2>
@@ -77,6 +106,20 @@
 							</div>
 						</div>
 					</div>
+
+					<!-- 保存/还原:只作用于本节的「角色设定」(场景设定是即时自动保存的,不走这个按钮) -->
+					<div class="save-btn-container text-center">
+						<button type="submit" class="btn btn-success btn-lg save-btn" id="saveConfigBtn">
+							<i class="fas fa-save mr-2"></i>保存角色设定
+						</button>
+					</div>
+
+					<div class="reset-btn-container text-center mb-3">
+						<button type="button" class="btn btn-warning btn-lg" id="resetConfigBtn">
+							<i class="fas fa-undo mr-2"></i>还原默认角色设定
+						</button>
+						<small class="d-block text-muted mt-2">只重置角色相关配置(当前角色、自定义角色与动作列表),恢复为默认角色「白屿涟音」;DeepSeek Key 保留。场景设定 / 消息设置 / 行为设置 / 玩家备注 / 歌单都不会动。</small>
+					</div>
 				</section>
 
 				<!-- 场景设定:可坐位置(手动标定清单 + 小地图) -->
@@ -100,19 +143,6 @@
 						</div>
 					</div>
 				</section>
-
-				<div class="save-btn-container text-center">
-					<button type="submit" class="btn btn-success btn-lg save-btn" id="saveConfigBtn">
-						<i class="fas fa-save mr-2"></i>保存所有配置
-					</button>
-				</div>
-
-				<div class="reset-btn-container text-center mb-3">
-					<button type="button" class="btn btn-warning btn-lg" id="resetConfigBtn">
-						<i class="fas fa-undo mr-2"></i>还原默认配置
-					</button>
-					<small class="d-block text-muted mt-2">这将删除所有自定义角色并恢复为默认设置(DeepSeek Key 会保留)</small>
-				</div>
 			</div>
 		</main>
 	</form>
@@ -128,9 +158,12 @@
 			$('#loadingOverlay').removeClass('hidden');
 			loadConfigFromServer();
 			loadScene();
+			loadStateMachine();
 			refreshSeatMap();
 			setInterval(refreshSeatMap, 2000);
+			setInterval(pollStateMachineCurrent, 2000);
 			bindObstacleDrawing();
+			bindStateMachine();
 
 			$('#configForm').submit(function(e) {
 				e.preventDefault();
@@ -138,7 +171,7 @@
 			});
 
 			$('#resetConfigBtn').click(function() {
-				if (confirm('确定要恢复默认配置吗？这将删除所有自定义设置')) {
+				if (confirm('确定要把角色设定恢复为默认吗？\n\n会删除你自定义的全部角色(含每个角色的动作列表)，只保留默认角色「白屿涟音」；DeepSeek Key 保留。\n场景设定 / 消息设置 / 行为设置 / 玩家备注 / 歌单不会受影响。')) {
 					resetConfigToDefault();
 				}
 			});
@@ -156,10 +189,112 @@
 				$('#rolesContainer').empty();
 				addNewRole();
 			});
+
+			// 动作列表:新增/删除行(行是动态生成的,用事件委托只绑一次)
+			$('#rolesContainer').on('click', '.add-action-btn', function() {
+				const $item = $(actionRowHtml({}));
+				$(this).siblings('.role-actions').append($item);
+				refreshActionPreview($item);
+			});
+			$('#rolesContainer').on('click', '.delete-action-btn', function() {
+				$(this).closest('.action-item').remove();
+			});
+			// 改「文字/动作」时实时刷新「实际发送」预览
+			$('#rolesContainer').on('input change', '.action-item .action-text, .action-item .action-emote', function() {
+				refreshActionPreview($(this).closest('.action-item'));
+			});
 		});
 
 		let allRoles = [];
 		let currentDeepseekKey = ''; // DeepSeek Key 已在卫月设置面板独立管理(重置角色/还原默认不影响),此处仅保存不修改
+
+		// 动作列表行模板(空值安全;用于渲染已有配置与「添加动作」)
+		function buildActionRows(actions) {
+			if (!actions || !actions.length) return '';
+			return actions.map(function(a) { return actionRowHtml(a || {}); }).join('');
+		}
+
+		// 渲染完已有动作后补上每行的「实际发送」预览(generateRoleEditHTML 末尾调用)
+		function refreshAllActionPreviews() {
+			$('#rolesContainer .action-item').each(function() { refreshActionPreview($(this)); });
+		}
+
+		function actionRowHtml(a) {
+			return `
+			<div class="action-item mb-3">
+				<div class="row g-2 align-items-end">
+					<div class="col-md-3">
+						<label class="form-label small mb-0">名称</label>
+						<input type="text" class="form-control form-control-sm action-name" value="` + escAttr(a.name || '') + `" placeholder="如:摸头">
+					</div>
+					<div class="col-md-3">
+						<label class="form-label small mb-0">文字（/em 内容）</label>
+						<input type="text" class="form-control form-control-sm action-text" value="` + escAttr(a.text || '') + `" placeholder="如:轻轻摸了摸&lt;t&gt;的头">
+					</div>
+					<div class="col-md-3">
+						<label class="form-label small mb-0">动作（游戏表情名）</label>
+						<input type="text" class="form-control form-control-sm action-emote" value="` + escAttr(a.emote || '') + `" placeholder="如:抚摸">
+					</div>
+					<div class="col-md-2">
+						<label class="form-label small mb-0">冷却（秒）</label>
+						<input type="number" min="0" class="form-control form-control-sm action-cooldown" value="` + (a.cooldown || 0) + `">
+					</div>
+					<div class="col-md-1">
+						<button type="button" class="btn btn-outline-danger btn-sm delete-action-btn w-100" title="删除该动作">
+							<i class="fas fa-trash"></i>
+						</button>
+					</div>
+				</div>
+				<div class="action-preview text-muted small mt-1"></div>
+			</div>`;
+		}
+
+		// 动作实际会发出的命令(与后端 RoleActionPlayer.BuildSteps 同一规则,改一处要同步另一处):
+		//   表情名→补本地化子命令「动作/motion」——**仅当填了文字时**(不补会让游戏多出一条官方表情提示)
+		//   文字  →「/em 文字」
+		function hasCjk(s) {
+			for (let i = 0; i < s.length; i++) {
+				const c = s.codePointAt(i);
+				if ((c >= 0x2E80 && c <= 0x9FFF) || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFF00 && c <= 0xFFEF)) return true;
+			}
+			return false;
+		}
+
+		function composeCommands(a) {
+			const emote = (a.emote || '').trim();
+			const text = (a.text || '').trim();
+			const cmds = [];
+			if (emote) {
+				let cmd = emote.startsWith('/') ? emote : '/' + emote;
+				// 已自带参数(有空格)= 尊重原文,不补子命令
+				if (text && !/[\s\u3000]/.test(cmd)) cmd += hasCjk(emote) ? ' 动作' : ' motion';
+				cmds.push(cmd);
+			}
+			if (text) cmds.push('/em ' + text);
+			return cmds;
+		}
+
+		// 把当前行的「实际发送」预览刷新出来(输入时实时变化)
+		function refreshActionPreview($item) {
+			const cmds = composeCommands({
+				emote: $item.find('.action-emote').val(),
+				text: $item.find('.action-text').val()
+			});
+			const $preview = $item.find('.action-preview');
+			if (!cmds.length) {
+				$preview.text('未填动作和文字，保存时会忽略这一行');
+				return;
+			}
+			// 每条命令单独一行(注意先转义再拼标签,别把 <code> 也转义了)
+			$preview.html('实际发送：<br>' + cmds.map(function(cmd) {
+				return '<code>' + escAttr(cmd) + '</code>';
+			}).join('<br>'));
+		}
+
+		// 动作列表的字段值可能含引号/尖括号:插入 HTML 属性前先转义
+		function escAttr(s) {
+			return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+		}
 
 		function generateRoleEditHTML(role) {
 			let roleEditHTML = `
@@ -213,8 +348,23 @@
 						<small class="text-muted">遇到这些词时停止生成</small>
 					</div>
 				</div>
+
+				<div class="row mt-3">
+					<div class="col-12">
+						<label class="form-label"><i class="fas fa-masks-theater me-1"></i>动作列表（AI 可主动执行）</label>
+						<div class="toggle-description mb-2">
+							每个动作 = 依次发送「/动作名」和「/em 文字」两条命令（相当于依次执行宏）。<br>
+							<b>名称</b>：给你自己看的备注，同时也是 AI 调用该动作时用的标识；<b>文字</b>：/em 后面的部分，支持游戏原生占位符（如 &lt;t&gt; = 当前选中的目标、&lt;me&gt; = 自己）；<b>动作</b>：游戏内表情名，只填名字即可（如 抚摸）；<b>冷却</b>：秒（0 = 不限制）。每行下面的「实际发送」会实时显示最终发出的命令：填了文字时会自动补本地化的「动作」/「motion」子命令（中文表情补“动作”、英文命令补“motion”），避免游戏里多出一条官方表情提示；没填文字就不补，保留游戏官方表情文字。
+						</div>
+						<div class="role-actions">` + buildActionRows(role.actions) + `</div>
+						<button type="button" class="btn btn-outline-primary btn-sm add-action-btn">
+							<i class="fas fa-plus me-1"></i>添加动作
+						</button>
+					</div>
+				</div>
 			</div>`;
 			$('#rolesContainer').append(roleEditHTML);
+			refreshAllActionPreviews();
 
 			$('.delete-role-btn').click(function() {
 				const $roleItem = $(this).closest('.role-item');
@@ -265,15 +415,27 @@
 				const roleName = $role.find('.role-name').val();
 				const originalName = $role.data('name'); // 获取原始角色名
 
-				const updatedRole = {
+			const updatedRole = {
 					name: roleName,
 					setting: $role.find('.role-setting').val(),
 					temperature: parseFloat($role.find('.role-temperature').val()) || 1,
 					maxTokens: parseInt($role.find('.role-max-tokens').val()) || 4096,
 					frequencyPenalty: parseFloat($role.find('.role-frequency-penalty').val()) || 0,
 					presencePenalty: parseFloat($role.find('.role-presence-penalty').val()) || 0,
-					stop: stopValue ? stopValue.split('|').filter(function(s) { return s.trim(); }) : []
+					stop: stopValue ? stopValue.split('|').filter(function(s) { return s.trim(); }) : [],
+					actions: []
 				};
+
+				// 动作列表(供 AI 主动执行):三个字段全空的行视为未填,直接忽略
+				$role.find('.action-item').each(function() {
+					const $a = $(this);
+					const name = ($a.find('.action-name').val() || '').trim();
+					const text = ($a.find('.action-text').val() || '').trim();
+					const emote = ($a.find('.action-emote').val() || '').trim();
+					const cooldown = parseInt($a.find('.action-cooldown').val(), 10) || 0;
+					if (!name && !text && !emote) return;
+					updatedRole.actions.push({ name: name, text: text, emote: emote, cooldown: cooldown < 0 ? 0 : cooldown });
+				});
 
 				allRolesMap[roleName] = updatedRole;
 
@@ -317,7 +479,7 @@
 				data: JSON.stringify(jsonData),
 				success: function(response) {
 					$('#loadingOverlay').addClass('hidden');
-					showAlert('配置保存成功', 'success');
+					showAlert('角色设定已保存', 'success');
 				},
 				error: function(xhr, status, error) {
 					$('#loadingOverlay').addClass('hidden');
@@ -389,13 +551,374 @@
 				type: 'POST',
 				success: function(response) {
 					$('#loadingOverlay').addClass('hidden');
-					showAlert('已恢复默认配置', 'success');
+					showAlert('角色设定已恢复默认(DeepSeek Key 保留)', 'success');
 					loadConfigFromServer();
 				},
 				error: function(xhr, status, error) {
 					$('#loadingOverlay').addClass('hidden');
 					showAlert('恢复默认配置失败: ' + error, 'danger');
 				}
+			});
+		}
+
+		// ===== 状态机(两层:第一层角色状态 / 第二层情景) =====
+		let sm = { enabled: false, currentMoodId: 0, currentSceneId: 0, moods: [], roles: [], armed: null, currentRole: '' };
+		let smSelMood = 0, smSelScene = 0;
+		let smEditing = false, smEditTimer = null, smSaveTimer = null;
+
+		function smMarkEditing() {
+			smEditing = true;
+			clearTimeout(smEditTimer);
+			smEditTimer = setTimeout(function() { smEditing = false; }, 1200);
+		}
+		function smMood(id) { return (sm.moods || []).find(function(m) { return m.id === id; }) || null; }
+		function smScene(mid, sid) { var m = smMood(mid); return m ? (m.scenes || []).find(function(s) { return s.id === sid; }) || null : null; }
+		function smNextId(list) { var max = 0; (list || []).forEach(function(x) { max = Math.max(max, x.id || 0); }); return max + 1; }
+
+		function loadStateMachine() {
+			$.ajax({
+				url: '/GetStateMachine', type: 'POST',
+				success: function(r) {
+					sm = r || {}; sm.moods = sm.moods || []; sm.roles = sm.roles || [];
+					if (!smMood(smSelMood)) smSelMood = sm.currentMoodId || (sm.moods[0] ? sm.moods[0].id : 0);
+					var m = smMood(smSelMood);
+					if (!smScene(smSelMood, smSelScene)) smSelScene = (m && m.scenes && m.scenes[0]) ? m.scenes[0].id : 0;
+					smRender();
+				},
+				error: function(x, s, e) { console.error('加载状态机失败:', e); }
+			});
+		}
+
+		// 只刷新「当前状态」徽章(轮询;不碰正在编辑的表单)
+		function pollStateMachineCurrent() {
+			$.ajax({
+				url: '/GetStateMachine', type: 'POST',
+				success: function(r) {
+					sm.enabled = r.enabled; sm.currentMoodId = r.currentMoodId; sm.currentSceneId = r.currentSceneId;
+					sm.currentRole = r.currentRole; sm.armed = r.armed;
+					$('#smEnabled').prop('checked', !!r.enabled);
+					smRenderCurrent();
+				},
+				error: function() { }
+			});
+		}
+
+		function smRender() {
+			$('#smEnabled').prop('checked', !!sm.enabled);
+			smRenderCurrent();
+			smRenderMoods();
+			smRenderMoodEditor();
+			smRenderScenes();
+			smRenderSceneEditor();
+		}
+
+		function smRenderCurrent() {
+			var m = smMood(sm.currentMoodId);
+			var s = m ? (m.scenes || []).find(function(x) { return x.id === sm.currentSceneId; }) : null;
+			if (!sm.enabled) {
+				$('#smCurrentBadge').removeClass('badge-primary').addClass('badge-secondary').text('未启用（回退到「当前角色」）');
+				return;
+			}
+			var role = sm.currentRole ? '；人设:' + sm.currentRole : '；无人设(AI 不回复)';
+			$('#smCurrentBadge').removeClass('badge-secondary').addClass('badge-primary')
+				.text((m ? m.name : '未选状态') + ' / ' + (s ? s.name : '未选情景') + role);
+		}
+
+		function smRenderMoods() {
+			var bar = $('#smMoodBar').empty();
+			bar.append('<span class="text-muted small mr-2">第一层（角色状态）：</span>');
+			(sm.moods || []).forEach(function(m) {
+				var active = m.id === smSelMood;
+				bar.append($('<button type="button" class="btn btn-sm mr-1 mb-1"></button>')
+					.addClass(active ? 'btn-primary' : 'btn-outline-primary').text(m.name || '(未命名)')
+					.on('click', function() {
+						smSelMood = m.id; var mm = smMood(m.id);
+						smSelScene = (mm && mm.scenes && mm.scenes[0]) ? mm.scenes[0].id : 0;
+						smRenderMoods(); smRenderMoodEditor(); smRenderScenes(); smRenderSceneEditor();
+					}));
+			});
+			bar.append($('<button type="button" class="btn btn-sm btn-outline-success mb-1">+ 新状态</button>').on('click', smAddMood));
+		}
+
+		function smRenderMoodEditor() {
+			var c = $('#smMoodEditor').empty();
+			var m = smMood(smSelMood);
+			if (!m) { c.append('<div class="text-muted small">还没有第一层状态，点「+ 新状态」建一个（如：心情很糟糕）。</div>'); return; }
+			c.append(`
+			<div class="border rounded p-2 mb-2">
+				<div class="row g-2">
+					<div class="col-md-3">
+						<label class="form-label small mb-0">状态名称</label>
+						<input type="text" class="form-control form-control-sm sm-mood-name" data-mood="${m.id}" value="${escAttr(m.name || '')}" placeholder="如：心情很糟糕">
+					</div>
+					<div class="col-md-6">
+						<label class="form-label small mb-0">给 AI 的说明（什么时候处于这个状态）</label>
+						<input type="text" class="form-control form-control-sm sm-mood-desc" data-mood="${m.id}" value="${escAttr(m.desc || '')}" placeholder="如：被冷落、被拒绝、感到委届时">
+					</div>
+					<div class="col-md-3 d-flex align-items-end">
+						<button type="button" class="btn btn-sm btn-outline-primary mr-2 sm-set-current-mood" data-mood="${m.id}">设为当前</button>
+						<button type="button" class="btn btn-sm btn-outline-danger sm-del-mood" data-mood="${m.id}">删除状态</button>
+					</div>
+				</div>
+			</div>`);
+		}
+
+		function smRenderScenes() {
+			var bar = $('#smSceneBar').empty();
+			var m = smMood(smSelMood);
+			bar.append('<span class="text-muted small mr-2">第二层（情景，属于「' + escAttr(m ? m.name : '') + '」）：</span>');
+			if (!m) { bar.append('<span class="text-muted small">先建第一层状态</span>'); return; }
+			(m.scenes || []).forEach(function(s) {
+				var active = s.id === smSelScene;
+				bar.append($('<button type="button" class="btn btn-sm mr-1 mb-1"></button>')
+					.addClass(active ? 'btn-primary' : 'btn-outline-primary').text(s.name || '(未命名)')
+					.on('click', function() { smSelScene = s.id; smRenderScenes(); smRenderSceneEditor(); }));
+			});
+			bar.append($('<button type="button" class="btn btn-sm btn-outline-success mb-1">+ 新情景</button>').on('click', smAddScene));
+		}
+
+		function smRenderSceneEditor() {
+			var c = $('#smSceneEditor').empty();
+			var m = smMood(smSelMood);
+			var s = m ? (m.scenes || []).find(function(x) { return x.id === smSelScene; }) : null;
+			if (!m || !s) { c.append('<div class="text-muted small">选中或新建一个情景（如：待机、对话）。</div>'); return; }
+			var roleOpts = '<option value="">（不使用人设，不会说话）</option>';
+			(sm.roles || []).forEach(function(rn) {
+				roleOpts += '<option value="' + escAttr(rn) + '"' + (rn === s.roleName ? ' selected' : '') + '>' + escAttr(rn) + '</option>';
+			});
+			var sib = (m.scenes || []).filter(function(x) { return x.id !== s.id; });
+			var pathHtml = '';
+			if (sib.length === 0) pathHtml = '<span class="text-muted small">同状态没有其他情景（无处可切）</span>';
+			else sib.forEach(function(x) {
+				var on = (s.nextSceneIds || []).indexOf(x.id) >= 0;
+				pathHtml += '<div class="form-check form-check-inline"><input type="checkbox" class="form-check-input sm-path" data-mood="' + m.id + '" data-scene="' + s.id + '" data-target="' + x.id + '" ' + (on ? 'checked' : '') + '><label class="form-check-label small">' + escAttr(x.name) + '</label></div>';
+			});
+			var actionsHtml = (s.actions || []).map(function(a, i) { return smActionRow(m.id, s.id, a, i); }).join('');
+			c.append(`
+			<div class="border rounded p-2">
+				<div class="row g-2 mb-2">
+					<div class="col-md-3">
+						<label class="form-label small mb-0">情景名称</label>
+						<input type="text" class="form-control form-control-sm sm-scene-name" data-mood="${m.id}" data-scene="${s.id}" value="${escAttr(s.name || '')}" placeholder="如：待机 / 对话">
+					</div>
+					<div class="col-md-4">
+						<label class="form-label small mb-0">人设（该情景使用的角色，须先在下面「角色设定」里保存）</label>
+						<select class="form-control form-control-sm sm-scene-role" data-mood="${m.id}" data-scene="${s.id}">${roleOpts}</select>
+					</div>
+					<div class="col-md-3">
+						<label class="form-label small mb-0">给 AI 的说明</label>
+						<input type="text" class="form-control form-control-sm sm-scene-desc" data-mood="${m.id}" data-scene="${s.id}" value="${escAttr(s.desc || '')}" placeholder="如：没人互动时">
+					</div>
+					<div class="col-md-2 d-flex align-items-end">
+						<button type="button" class="btn btn-sm btn-outline-primary mr-2 sm-set-current-scene" data-mood="${m.id}" data-scene="${s.id}">设为当前</button>
+						<button type="button" class="btn btn-sm btn-outline-danger sm-del-scene" data-mood="${m.id}" data-scene="${s.id}">删情景</button>
+					</div>
+				</div>
+				<div class="mb-2">
+					<label class="form-label small mb-0">允许切换到（路径；都不勾 = 同状态内不限）</label>
+					<div>${pathHtml}</div>
+				</div>
+				<label class="form-label small mb-0">动作列表（按「冷却」秒数自动随机轮换）</label>
+				<div class="sm-actions">${actionsHtml}</div>
+				<button type="button" class="btn btn-outline-primary btn-sm sm-add-action" data-mood="${m.id}" data-scene="${s.id}">+ 添加动作</button>
+			</div>`);
+		}
+
+		function smActionRow(mid, sid, a, i) {
+			a = a || {};
+			var pos = a.hasPos
+				? '已记录 (' + (+a.x || 0).toFixed(1) + ', ' + (+a.z || 0).toFixed(1) + ') 面向 ' + Math.round((a.yaw || 0) * 180 / Math.PI) + '°'
+				: '<span class="text-muted">未设置（原在当前位置做）</span>';
+			return `
+			<div class="sm-action-item mb-2">
+				<div class="row g-2 align-items-end">
+					<div class="col-md-3">
+						<label class="form-label small mb-0">名称</label>
+						<input type="text" class="form-control form-control-sm sm-act-name" data-mood="${mid}" data-scene="${sid}" data-idx="${i}" value="${escAttr(a.name || '')}" placeholder="如：靠墙站着">
+					</div>
+					<div class="col-md-2">
+						<label class="form-label small mb-0">动作（游戏表情名）</label>
+						<input type="text" class="form-control form-control-sm sm-act-emote" data-mood="${mid}" data-scene="${sid}" data-idx="${i}" value="${escAttr(a.emote || '')}" placeholder="如：坐下">
+					</div>
+					<div class="col-md-2">
+						<label class="form-label small mb-0">冷却（秒）</label>
+						<input type="number" min="0" class="form-control form-control-sm sm-act-cd" data-mood="${mid}" data-scene="${sid}" data-idx="${i}" value="${a.cooldown || 0}">
+					</div>
+					<div class="col-md-3">
+						<label class="form-label small mb-0">位置</label>
+						<div class="d-flex align-items-center">
+							<span class="small mr-2 flex-grow-1">${pos}</span>
+							<button type="button" class="btn btn-sm btn-outline-info mr-1 sm-arm-pos" data-mood="${mid}" data-scene="${sid}" data-idx="${i}">记录位置</button>
+							<button type="button" class="btn btn-sm btn-outline-secondary sm-clear-pos" data-mood="${mid}" data-scene="${sid}" data-idx="${i}">清空</button>
+						</div>
+					</div>
+					<div class="col-md-2">
+						<button type="button" class="btn btn-outline-danger btn-sm w-100 sm-del-action" data-mood="${mid}" data-scene="${sid}" data-idx="${i}">删除</button>
+					</div>
+				</div>
+			</div>`;
+		}
+
+		function smApplyInput($el) {
+			var mid = +$el.data('mood'), sid = +$el.data('scene'), idx = $el.data('idx');
+			if ($el.hasClass('sm-mood-name')) { var m = smMood(mid); if (m) m.name = $el.val(); }
+			else if ($el.hasClass('sm-mood-desc')) { var m2 = smMood(mid); if (m2) m2.desc = $el.val(); }
+			else if ($el.hasClass('sm-scene-name')) { var s = smScene(mid, sid); if (s) s.name = $el.val(); }
+			else if ($el.hasClass('sm-scene-desc')) { var s2 = smScene(mid, sid); if (s2) s2.desc = $el.val(); }
+			else if ($el.hasClass('sm-scene-role')) { var s3 = smScene(mid, sid); if (s3) s3.roleName = $el.val(); }
+			else if ($el.hasClass('sm-path')) {
+				var s4 = smScene(mid, sid);
+				if (s4) {
+					s4.nextSceneIds = s4.nextSceneIds || [];
+					var tid = +$el.data('target'), k = s4.nextSceneIds.indexOf(tid);
+					if ($el.is(':checked')) { if (k < 0) s4.nextSceneIds.push(tid); }
+					else if (k >= 0) s4.nextSceneIds.splice(k, 1);
+				}
+			}
+			else if ($el.hasClass('sm-act-name') || $el.hasClass('sm-act-emote') || $el.hasClass('sm-act-cd')) {
+				var s5 = smScene(mid, sid);
+				if (s5 && s5.actions && s5.actions[idx]) {
+					var a = s5.actions[idx];
+					if ($el.hasClass('sm-act-name')) a.name = $el.val();
+					else if ($el.hasClass('sm-act-emote')) a.emote = $el.val();
+					else a.cooldown = parseInt($el.val(), 10) || 0;
+				}
+			}
+		}
+
+		function smSave(immediate) {
+			clearTimeout(smSaveTimer);
+			var doSave = function() {
+				$('#smStatus').removeClass('text-success text-danger').text('保存中…');
+				$.ajax({
+					url: '/SaveStateMachine', type: 'POST', contentType: 'application/json',
+					data: JSON.stringify({ enabled: !!sm.enabled, moods: sm.moods || [] }),
+					success: function() {
+						$('#smStatus').removeClass('text-danger').addClass('text-success').text('已保存');
+						setTimeout(function() { if ($('#smStatus').text() === '已保存') $('#smStatus').text(''); }, 1500);
+					},
+					error: function(x, s, e) { $('#smStatus').removeClass('text-success').addClass('text-danger').text('保存失败:' + e); }
+				});
+			};
+			if (immediate) doSave(); else smSaveTimer = setTimeout(doSave, 600);
+		}
+
+		function smAddMood() {
+			var name = prompt('新状态名称（第一层，如：心情很糟糕）：');
+			if (!name || !name.trim()) return;
+			var id = smNextId(sm.moods);
+			sm.moods.push({ id: id, name: name.trim(), desc: '', scenes: [] });
+			smSelMood = id; smSelScene = 0;
+			smRender(); smSave(true);
+		}
+
+		function smAddScene() {
+			var m = smMood(smSelMood);
+			if (!m) { showAlert('先建一个第一层状态', 'warning'); return; }
+			var name = prompt('新情景名称（第二层，如：待机 / 对话）：');
+			if (!name || !name.trim()) return;
+			var id = smNextId(m.scenes);
+			m.scenes.push({ id: id, name: name.trim(), desc: '', roleName: '', actions: [], nextSceneIds: [] });
+			smSelScene = id;
+			smRender(); smSave(true);
+		}
+
+		function bindStateMachine() {
+			// 状态机输入框里敲 Enter 不要提交外层表单(那是角色设定的保存)
+			$('#smRoot').on('keydown', 'input', function(e) { if (e.key === 'Enter') e.preventDefault(); });
+			$('#smEnabled').on('change', function() {
+				sm.enabled = $(this).is(':checked');
+				smSave(true); smRenderCurrent();
+			});
+			$('#smRefreshBtn').on('click', loadStateMachine);
+			$('#smSaveBtn').on('click', function() { smSave(true); });
+
+			// 表单输入 → 写回 sm + 防抖保存（不重渲，保留焦点）
+			$('#smRoot').on('input', '.sm-mood-name, .sm-mood-desc, .sm-scene-name, .sm-scene-desc, .sm-act-name, .sm-act-emote, .sm-act-cd', function() {
+				smApplyInput($(this)); smMarkEditing(); smSave();
+			});
+			$('#smRoot').on('change', '.sm-scene-role, .sm-path', function() {
+				smApplyInput($(this)); smSave();
+			});
+
+			// 结构操作
+			$('#smRoot').on('click', '.sm-add-action', function() {
+				var mid = +$(this).data('mood'), sid = +$(this).data('scene');
+				var s = smScene(mid, sid); if (!s) return;
+				s.actions = s.actions || [];
+				s.actions.push({ name: '', emote: '', cooldown: 30, hasPos: false, x: 0, y: 0, z: 0, yaw: 0, territoryId: 0 });
+				smRenderSceneEditor(); smSave();
+			});
+			$('#smRoot').on('click', '.sm-del-action', function() {
+				var mid = +$(this).data('mood'), sid = +$(this).data('scene'), idx = +$(this).data('idx');
+				var s = smScene(mid, sid); if (!s || !s.actions || !s.actions[idx]) return;
+				s.actions.splice(idx, 1); smRenderSceneEditor(); smSave(true);
+			});
+			$('#smRoot').on('click', '.sm-del-mood', function() {
+				var id = +$(this).data('mood'); var m = smMood(id); if (!m) return;
+				if (!confirm('删除状态「' + m.name + '」及其全部情景、动作？')) return;
+				sm.moods = sm.moods.filter(function(x) { return x.id !== id; });
+				if (smSelMood === id) { smSelMood = sm.moods[0] ? sm.moods[0].id : 0; smSelScene = 0; }
+				smRender(); smSave(true);
+			});
+			$('#smRoot').on('click', '.sm-del-scene', function() {
+				var mid = +$(this).data('mood'), sid = +$(this).data('scene');
+				var m = smMood(mid); if (!m) return;
+				var s = smScene(mid, sid); if (!s) return;
+				if (!confirm('删除情景「' + s.name + '」及其动作？')) return;
+				m.scenes = m.scenes.filter(function(x) { return x.id !== sid; });
+				(m.scenes || []).forEach(function(x) { x.nextSceneIds = (x.nextSceneIds || []).filter(function(id) { return id !== sid; }); });
+				if (smSelScene === sid) smSelScene = m.scenes[0] ? m.scenes[0].id : 0;
+				smRenderScenes(); smRenderSceneEditor(); smSave(true);
+			});
+
+			// 设为当前（调试/手动）
+			$('#smRoot').on('click', '.sm-set-current-mood', function() {
+				var m = smMood(+$(this).data('mood')); if (!m) return;
+				smSwitchCurrent({ mood: m.name }, '已切换到状态「' + m.name + '」');
+			});
+			$('#smRoot').on('click', '.sm-set-current-scene', function() {
+				var mid = +$(this).data('mood'), sid = +$(this).data('scene');
+				var m = smMood(mid), s = smScene(mid, sid); if (!m || !s) return;
+				smSwitchCurrent({ mood: m.name, scene: s.name }, '已切换到「' + m.name + ' / ' + s.name + '」');
+			});
+
+			// 位置
+			$('#smRoot').on('click', '.sm-arm-pos', function() {
+				var mid = +$(this).data('mood'), sid = +$(this).data('scene'), idx = +$(this).data('idx');
+				var s = smScene(mid, sid); if (!s || !s.actions || !s.actions[idx]) return;
+				var a = s.actions[idx];
+				if (!a.name || !a.name.trim()) { showAlert('先给这个动作填「名称」再记录位置', 'warning'); return; }
+				smSave(true); // 确保动作已入库,/aca pos 才能找到
+				$.ajax({
+					url: '/ArmIdlePos', type: 'POST', contentType: 'application/json',
+					data: JSON.stringify({ moodId: mid, sceneId: sid, name: a.name.trim() }),
+					success: function(r) { showAlert(r.message || '已准备记录位置', r.armed ? 'success' : 'warning'); },
+					error: function(x, s2, e) { showAlert('记录位置失败: ' + e, 'danger'); }
+				});
+			});
+			$('#smRoot').on('click', '.sm-clear-pos', function() {
+				var mid = +$(this).data('mood'), sid = +$(this).data('scene'), idx = +$(this).data('idx');
+				var s = smScene(mid, sid); if (!s || !s.actions || !s.actions[idx]) return;
+				var a = s.actions[idx];
+				if (!confirm('清空「' + (a.name || '') + '」的位置？')) return;
+				a.hasPos = false; a.x = a.y = a.z = a.yaw = 0; a.territoryId = 0;
+				smRenderSceneEditor();
+				smSave(true);
+				$.ajax({ url: '/ClearIdlePos', type: 'POST', contentType: 'application/json', data: JSON.stringify({ moodId: mid, sceneId: sid, name: a.name || '' }) });
+			});
+		}
+
+		function smSwitchCurrent(payload, okMsg) {
+			$.ajax({
+				url: '/SwitchStateMachine', type: 'POST', contentType: 'application/json',
+				data: JSON.stringify(payload),
+				success: function(r) {
+					if (r.result === 'error') { showAlert(r.message, 'danger'); return; }
+					showAlert(okMsg, 'success');
+					pollStateMachineCurrent();
+				},
+				error: function(x, s, e) { showAlert('切换失败: ' + e, 'danger'); }
 			});
 		}
 

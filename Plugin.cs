@@ -74,7 +74,7 @@ public sealed class Plugin : IDalamudPlugin
 
 		CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
 		{
-			HelpMessage = "打开 AuraCanAI 主面板;子指令: /aca list 附近玩家 | /aca map [名字] 活点地图 | /aca note 查看/编辑当前选中玩家的备注 | /aca search [名字] 回忆检索 | /aca look [名字] 看向最后看你的人 | /aca behavior 行为设置 | /aca music 演奏(MIDI) | /aca setting 设置面板 | /aca macro N 触发宏(sN 共享宏) | 移动: /aca face/approach/follow/leave [名字] | /aca move x y z | /aca stop | 场景: /aca seatadd [可选名字] 记录当前坐点 | /aca seatstand [名字|#id] 校准座前站定点 | /aca seatgo [名字|#id|玩家名|空=最近] 去坐(填玩家名=坐 TA 旁边最近的空座)"
+			HelpMessage = "打开 AuraCanAI 主面板;子指令: /aca list 附近玩家 | /aca map [名字] 活点地图 | /aca note 查看/编辑当前选中玩家的备注 | /aca search [名字] 回忆检索 | /aca look [名字] 看向最后看你的人 | /aca behavior 行为设置 | /aca music 演奏(MIDI) | /aca setting 设置面板 | /aca macro N 触发宏(sN 共享宏;失败时自动附诊断) | /aca macrodia [N] 宏子模块诊断 | /aca action [名称] 执行当前角色的自定义动作(不带名称=列出) | 状态机: /aca pos [动作名] 记录待机动作的位置 | /aca idle [名称] 做当前情景的待机动作 | 小队: /aca party [leave|invite 名字|accept] | /aca leavescene 测试「离开」(走到人少处/坐下+60秒退队) | 移动: /aca face/approach/follow/leave [名字] | /aca move x y z | /aca stop | 场景: /aca seatadd [可选名字] 记录当前坐点 | /aca seatstand [名字|#id] 校准座前站定点 | /aca seatgo [名字|#id|玩家名|空=最近] 去坐(填玩家名=坐 TA 旁边最近的空座)"
 		});
 
 		PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
@@ -98,12 +98,48 @@ public sealed class Plugin : IDalamudPlugin
 				var ok = TriggerMacro(macroIdx, shared);
 				Log?.Information(ok
 					? $"已触发宏 {macroIdx}{(shared ? "(共享)" : "")}"
-					: $"触发宏 {macroIdx} 失败(未登录/宏为空/执行器忙)");
+					: $"触发宏 {macroIdx} 失败: {MacroExecutor.Diagnose(macroIdx, shared)}");
 			}
 			else
 			{
 				Log?.Warning("/aca macro 参数需为 0-99 的宏编号,如 /aca macro 3;共享宏用 /aca macro s3");
 			}
+			return;
+		}
+		// /aca macrodia [N]:宏子模块诊断(指针/锁定状态/宏是否为空;不执行)
+		if (arg.StartsWith("macrodia", StringComparison.OrdinalIgnoreCase))
+		{
+			var spec = arg.Length > 8 ? arg[8..].Trim() : "1";
+			var shared = spec.StartsWith("s", StringComparison.OrdinalIgnoreCase);
+			if (shared) spec = spec[1..].Trim();
+			if (!int.TryParse(spec, out var diagIdx) || diagIdx < 0 || diagIdx > 99)
+			{
+				Log?.Warning("/aca macrodia [0-99] 或 /aca macrodia s3(共享宏)");
+				return;
+			}
+			Log?.Information($"宏诊断[{diagIdx}{(shared ? "/共享" : "")}]: {MacroExecutor.Diagnose(diagIdx, shared)}");
+			return;
+		}
+		// /aca action [名称]:执行当前角色的自定义动作(带名称=执行;不带=列出;AI 的 rp_emote 工具走同一条路)
+		if (arg.StartsWith("action", StringComparison.OrdinalIgnoreCase))
+		{
+			var core = AuraCore;
+			if (core == null) { Log?.Warning("AuraCanAI 核心未就绪"); return; }
+			var actionName = arg.Length > 6 ? arg[6..].Trim() : "";
+			var roleName = core.GetCurrentRoleName();
+			var list = core.GetRoleActions(roleName);
+			if (list.Count == 0)
+			{
+				Log?.Information($"当前角色「{(roleName.Length == 0 ? "未选择" : roleName)}」没有配置动作列表(前端「角色设定 → 角色管理 → 动作列表」添加)");
+				return;
+			}
+			if (actionName.Length == 0)
+			{
+				Log?.Information($"动作列表({roleName}): " + string.Join(" | ", list.Select(a =>
+					RoleActionPlayer.DisplayName(a) + (a.cooldown > 0 ? $"(冷却{a.cooldown}s)" : ""))));
+				return;
+			}
+			Log?.Information(core.RoleActions.PerformByName(roleName, actionName));
 			return;
 		}
 		// /aca look [名字]:看向指定玩家;不带名字 = 看向最后一个看我的人(最后注视你的玩家)
@@ -235,6 +271,28 @@ public sealed class Plugin : IDalamudPlugin
 			if (!ok) coreMV.ChatNotice($"[移动] {tip}");
 			return;
 		}
+		// /aca pos [动作名]:把当前坐标/面向记录到状态机某个待机动作的「位置」
+		//   带动作名 = 在当前情景的动作列表里找;/aca pos 不带名字 = 写进前端「记录位置」武装的那条
+		if (lower == "pos" || lower.StartsWith("pos ", StringComparison.Ordinal))
+		{
+			var corePos = AuraCore;
+			if (corePos == null) { Log?.Warning("AuraCanAI 核心未就绪"); return; }
+			var posName = arg.Length > 3 ? arg[3..].Trim() : "";
+			var msg = corePos.State.RecordPosition(posName);
+			Log?.Information(msg);
+			corePos.ChatNotice($"[状态机] {msg}");
+			return;
+		}
+		// /aca idle [动作名]:执行当前情景的某个待机动作(不带名字=随机一个)
+		if (lower == "idle" || lower.StartsWith("idle ", StringComparison.Ordinal))
+		{
+			var coreIdle = AuraCore;
+			if (coreIdle == null) { Log?.Warning("AuraCanAI 核心未就绪"); return; }
+			var idleName = arg.Length > 4 ? arg[4..].Trim() : "";
+			var msg = coreIdle.State.PerformIdleAction(idleName);
+			Log?.Information(msg);
+			return;
+		}
 		// /aca note:查看/编辑当前选中玩家的备注(查询与编辑同一 UI)
 		if (lower == "note")
 		{
@@ -253,10 +311,43 @@ public sealed class Plugin : IDalamudPlugin
 			return;
 		}
 		// /aca party:输出小队状态调试信息(排查 in_party 条件用)
-		if (lower == "party")
+		//   /aca party leave = 立刻退出小队;/aca party invite 名字 = 邀请组队;/aca party accept = 接受邀请
+		if (lower == "party" || lower.StartsWith("party ", StringComparison.Ordinal))
 		{
 			var coreP = AuraCore;
-			Log?.Information($"小队状态: {coreP?.DebugPartyInfo() ?? "核心未就绪"}");
+			if (coreP == null) { Log?.Warning("AuraCanAI 核心未就绪"); return; }
+			var sub = arg.Length > 5 ? arg[5..].Trim() : "";
+			if (sub.Length == 0)
+			{
+				Log?.Information($"小队状态: {coreP.DebugPartyInfo()}");
+				return;
+			}
+			if (sub.Equals("leave", StringComparison.OrdinalIgnoreCase))
+			{
+				Log?.Information(coreP.PartyAction("leave", ""));
+				return;
+			}
+			if (sub.Equals("accept", StringComparison.OrdinalIgnoreCase))
+			{
+				Log?.Information(coreP.PartyAction("accept", ""));
+				return;
+			}
+			if (sub.StartsWith("invite", StringComparison.OrdinalIgnoreCase))
+			{
+				var who = sub.Length > 6 ? sub[6..].Trim() : "";
+				if (who.Length == 0) { Log?.Warning("用法: /aca party invite 玩家名"); return; }
+				Log?.Information(coreP.PartyAction("invite", who));
+				return;
+			}
+			Log?.Warning("用法: /aca party | /aca party leave | /aca party invite 玩家名 | /aca party accept");
+			return;
+		}
+		// /aca leavescene:「离开」流程测试(走到人少的地方/坐下 + 静默 60 秒退队倒计时)
+		if (lower == "leavescene")
+		{
+			var coreL = AuraCore;
+			if (coreL == null) { Log?.Warning("AuraCanAI 核心未就绪"); return; }
+			Log?.Information($"离开: {coreL.LeaveScene()}");
 			return;
 		}
 		if (lower == "list")

@@ -71,6 +71,12 @@ public class HttpServer : IDisposable
 		_methods["SaveHouses"] = _core.SaveHousesJson;
 		_methods["SetCurrentHouse"] = _core.SetCurrentHouseJson;
 		_methods["SaveObstacles"] = _core.SaveObstaclesJson;
+		_methods["GetStateMachine"] = _ => _core.GetStateMachineJson();
+		_methods["SaveStateMachine"] = _core.SaveStateMachineJson;
+		_methods["SetStateMachineEnabled"] = _core.SetStateMachineEnabledJson;
+		_methods["SwitchStateMachine"] = _core.SwitchStateMachineJson;
+		_methods["ArmIdlePos"] = _core.ArmIdlePosJson;
+		_methods["ClearIdlePos"] = _core.ClearIdlePosJson;
 		LoadStaticPages();
 	}
 

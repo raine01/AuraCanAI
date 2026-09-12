@@ -18,6 +18,8 @@ public class BehaviorEngine
 	private readonly List<DelayedAction> _delayed = new(); // after 延迟任务(look 或延迟动作,不占队列)
 	private readonly List<MacroChain> _chains = new(); // 多宏连发链(trigger 1,2,3,逐个执行,不占队列)
 	private bool _macroFiredThisTick; // 本 tick 是否已触发过宏(延迟/队列/链共用,防同帧连发)
+	private DateTime _busySince = DateTime.MinValue; // 宏执行器开始持续忙碌的时间(诊断总线用)
+	private DateTime _lastBusyWarn = DateTime.MinValue; // 上次「持续忙碌」告警时间(限频)
 
 	private const int MaxQueue = 3; // 队列最多 3 个动作
 	private static readonly TimeSpan QueueTtl = TimeSpan.FromSeconds(5); // 动作在队列内最多保留 5 秒
@@ -73,7 +75,7 @@ public class BehaviorEngine
 			foreach (var item in _core.GetBehaviorItems())
 			{
 				if (!item.enabled) continue;
-				var parsed = BehaviorParser.Parse(item.definition, item.id, item.comment, item.chatNotice, item.skipOnLeave, item.skipOnCombat);
+				var parsed = BehaviorParser.Parse(item.definition, item.id, item.comment, item.chatNotice, item.skipOnLeave, item.skipOnCombat, item.rpMode);
 				rules.AddRange(parsed.Rules);
 				foreach (var err in parsed.Errors)
 					Plugin.Log?.Warning($"行为#{item.id} 定义有误: {err}");
@@ -104,18 +106,27 @@ public class BehaviorEngine
 				var now = EvalRule(rule);
 				if (now && !rule.WasTrue && DateTime.Now >= rule.CooldownUntil)
 				{
-					// 「need 不满足」「离开时不触发」「战斗中不触发」:命中任一 → 丢弃(不触发、不设冷却、状态照常更新)
+					// 「need 不满足」「离开时不触发」「战斗中不触发」「角色扮演限制」:命中任一 → 丢弃(不触发、不设冷却、状态照常更新)
 					var skipReason = "";
 					var needMiss = EvalNeed(rule);
 					if (needMiss.Length > 0)
 						skipReason = $"need 条件不满足({needMiss})";
 					else
+					{
 						skipReason = (rule.SkipOnLeave && _core.IsPlayerAway(), rule.SkipOnCombat && _core.IsInCombat()) switch
 						{
 							(true, _) => "你的状态为「离开」",
 							(_, true) => "战斗中",
 							_ => "",
 						};
+						// 角色扮演限制(仅RP时触发 / RP时不触发 / 不做限制)
+						if (skipReason.Length == 0 && rule.RpMode != BehaviorRpMode.NoLimit)
+						{
+							var rp = _core.IsRolePlaying();
+							if (rule.RpMode == BehaviorRpMode.RpOnly && !rp) skipReason = "当前不在角色扮演状态";
+							else if (rule.RpMode == BehaviorRpMode.RpSkip && rp) skipReason = "你正处于角色扮演状态";
+						}
+					}
 					if (skipReason.Length > 0)
 					{
 						Plugin.Log?.Information($"行为[{RuleLabel(rule)}]触发已丢弃({skipReason})");
@@ -129,6 +140,9 @@ public class BehaviorEngine
 						if (warm || grace)
 						{
 							Plugin.Log?.Information($"行为[{RuleLabel(rule)}]触发动作已丢弃({(warm ? "配置重载预热" : "启动保护期")})");
+							// 配置重载瞬间已满足的条件会被主动吞掉(防重载后全部重跑),用户刚保存就想测会误以为坏了 → 给条提示
+							if (warm && rule.ChatNotice)
+								_core.ChatNotice($"[行为] {RuleLabel(rule)} → 丢弃(配置重载预热:刚保存/重载时条件已满足;状态变化后会正常触发)");
 						}
 						else
 						{
@@ -420,7 +434,7 @@ public class BehaviorEngine
 		}
 		else
 		{
-			Plugin.Log?.Warning($"行为[{label}]触发宏 {macroDesc} 失败(未登录/宏为空/执行器忙)");
+			Plugin.Log?.Warning($"行为[{label}]触发宏 {macroDesc} 失败: {MacroExecutor.Diagnose(spec.Index, spec.Shared)}");
 		}
 		return ok;
 	}
@@ -475,7 +489,7 @@ public class BehaviorEngine
 			}
 			else
 			{
-				Plugin.Log?.Warning($"行为[{RuleLabel(c.Rule)}]触发宏 {desc} 失败(未登录/宏为空),继续下一个");
+				Plugin.Log?.Warning($"行为[{RuleLabel(c.Rule)}]触发宏 {desc} 失败: {MacroExecutor.Diagnose(spec.Index, spec.Shared)},继续下一个");
 			}
 		}
 	}
@@ -487,7 +501,7 @@ public class BehaviorEngine
 
 	private void Enqueue(BehaviorRule rule)
 	{
-		_queue.RemoveAll(q => DateTime.Now - q.EnqueuedAt > QueueTtl);
+		DropExpiredQueued("入队时清理");
 		if (_queue.Count >= MaxQueue)
 		{
 			Plugin.Log?.Information($"行为[{RuleLabel(rule)}]触发动作被跳过:队列已满({MaxQueue})");
@@ -496,14 +510,38 @@ public class BehaviorEngine
 		_queue.Add(new PendingAction { Rule = rule, EnqueuedAt = DateTime.Now });
 	}
 
+	/// <summary>移除队列中等待超时的动作。⚠️ 不再静默丢弃:宏执行器持续忙时是这里把动作吃掉,曾因此“触发了但什么都没发生且无日志”(2026-09-11 踩坑)。</summary>
+	private void DropExpiredQueued(string why)
+	{
+		if (_queue.Count == 0) return;
+		var expired = _queue.Where(q => DateTime.Now - q.EnqueuedAt > QueueTtl).ToList();
+		foreach (var e in expired)
+		{
+			_queue.Remove(e);
+			Plugin.Log?.Warning($"行为[{RuleLabel(e.Rule)}]触发动作超时丢弃({why}:等待 {QueueTtl.TotalSeconds:0}s 未执行;宏执行器: {MacroExecutor.Diagnose(0, false)})");
+			if (e.Rule.ChatNotice) _core.ChatNotice($"[行为] {RuleLabel(e.Rule)} → 丢弃(等待执行超时,宏执行器忙)");
+		}
+	}
+
 	/// <summary>泵送队列:移除超时项;执行器空闲时执行队首(每次 tick 最多一个,避免宏连发冲突)</summary>
 	private void PumpQueue()
 	{
-		_queue.RemoveAll(q => DateTime.Now - q.EnqueuedAt > QueueTtl);
+		DropExpiredQueued("泵送");
 		if (_queue.Count == 0) return;
 		var item = _queue[0];
 		if (_macroFiredThisTick) return; // 本 tick 已触发过宏(延迟任务/连发链),下个 tick 再试
-		if (MacroExecutor.IsBusy()) return; // 执行器正忙(/wait 等),下个 tick 再试,直到超时移除
+		if (MacroExecutor.IsBusy()) // 执行器正忙(/wait 等),下个 tick 再试,直到超时移除
+		{
+			if (_busySince == DateTime.MinValue) _busySince = DateTime.Now;
+			// 持续忙 > 15s 且距上次告警 > 60s:输出一次诊断(防真卡死时静默队列积压)
+			if (DateTime.Now - _busySince > TimeSpan.FromSeconds(15) && DateTime.Now - _lastBusyWarn > TimeSpan.FromSeconds(60))
+			{
+				_lastBusyWarn = DateTime.Now;
+				Plugin.Log?.Warning($"行为引擎:宏执行器已持续忙碌 {(int)(DateTime.Now - _busySince).TotalSeconds}s,队列积压 {_queue.Count} 条;{MacroExecutor.Diagnose(0, false)}");
+			}
+			return;
+		}
+		_busySince = DateTime.MinValue;
 
 		_queue.RemoveAt(0);
 		var spec = item.Rule.Macros.Count == 1 ? item.Rule.Macros[0] : null;

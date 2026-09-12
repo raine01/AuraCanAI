@@ -37,7 +37,7 @@ public static class BehaviorParser
 	private static readonly Regex CondRe = new(@"^(?<name>[a-z_]+)(?:\s*(?<op>!=|>=|<=|=)\s*(?<val>.*))?$", RegexOptions.IgnoreCase);
 
 	/// <summary>解析整段定义文本(可能含多条 ; 分隔的规则)。错误列表按段号给出,UI 据此红字提示。</summary>
-	public static BehaviorParseResult Parse(string definition, int itemId, string comment, bool chatNotice, bool skipOnLeave, bool skipOnCombat)
+	public static BehaviorParseResult Parse(string definition, int itemId, string comment, bool chatNotice, bool skipOnLeave, bool skipOnCombat, BehaviorRpMode rpMode = BehaviorRpMode.NoLimit)
 	{
 		var result = new BehaviorParseResult();
 		var segments = (definition ?? "").Split(';');
@@ -45,14 +45,14 @@ public static class BehaviorParser
 		{
 			var seg = segments[i].Trim();
 			if (seg.Length == 0) continue;
-			var rule = ParseSegment(seg, itemId, comment, chatNotice, skipOnLeave, skipOnCombat, i + 1, result.Errors);
+			var rule = ParseSegment(seg, itemId, comment, chatNotice, skipOnLeave, skipOnCombat, rpMode, i + 1, result.Errors);
 			if (rule != null) result.Rules.Add(rule);
 		}
 		return result;
 	}
 
 	/// <summary>解析单段规则。失败时向 errors 写入「第N段:...」并返回 null。</summary>
-	private static BehaviorRule? ParseSegment(string seg, int itemId, string comment, bool chatNotice, bool skipOnLeave, bool skipOnCombat, int segNo, List<string> errors)
+	private static BehaviorRule? ParseSegment(string seg, int itemId, string comment, bool chatNotice, bool skipOnLeave, bool skipOnCombat, BehaviorRpMode rpMode, int segNo, List<string> errors)
 	{
 		void Err(string msg) => errors.Add($"第{segNo}段: {msg}");
 
@@ -114,6 +114,7 @@ public static class BehaviorParser
 			ChatNotice = chatNotice,
 			SkipOnLeave = skipOnLeave,
 			SkipOnCombat = skipOnCombat,
+			RpMode = rpMode,
 			CooldownSec = cooldown,
 		};
 		// after 关键字存在但区间残缺/缺逗号等格式错误,先于正常解析报错(避免残留内容混入动作解析)
@@ -429,7 +430,7 @@ public static class BehaviorParser
 		seg = FixAfterInConds(seg);
 		var errors = new List<string>();
 		// itemId/comment 等仅用于日志,重排不需要;skip 开关不影响文本重建
-		var rule = ParseSegment(seg, 0, "", false, false, false, 1, errors);
+		var rule = ParseSegment(seg, 0, "", false, false, false, BehaviorRpMode.NoLimit, 1, errors);
 		if (rule != null) return RuleToText(rule); // 解析成功 → 直接规范重建
 
 		// 解析失败:尝试 need 在 when 前的交换(仅在修正后能解析成功才采用,
@@ -439,7 +440,7 @@ public static class BehaviorParser
 		{
 			fixedSeg = FixAfterInConds(fixedSeg);
 			errors.Clear();
-			rule = ParseSegment(fixedSeg, 0, "", false, false, false, 1, errors);
+			rule = ParseSegment(fixedSeg, 0, "", false, false, false, BehaviorRpMode.NoLimit, 1, errors);
 			if (rule != null) return RuleToText(rule);
 		}
 		return seg; // 仍失败:保留原文,由保存时校验报错
