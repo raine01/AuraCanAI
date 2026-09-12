@@ -189,6 +189,20 @@ public sealed class MovementController : IDisposable
 		if (block != null) return $"当前状态不能移动({block})";
 		var seat = _core.ResolveSeatForSitting(selector, side, out var err);
 		if (seat == null) return err;
+		// 已经是当前坐着的那把座位(且没有别的可选)→ 不动,只报告;
+		// 否则“挪一挪/换个边”会变成坐着不动却报成功(用户实测:她坐着没动)
+		SitNoOp = false;
+		if (_core.GetSeatedState() == true)
+		{
+			var cur = _core.SeatUnderPlayer();
+			if (cur != null && cur.Id == seat.Id && cur.HouseId == seat.HouseId)
+			{
+				_sitSeat = seat;
+				SitNoOp = true;
+				_log.Information($"坐: 已经在 [{seat.Label()}] 上,不用动");
+				return "";
+			}
+		}
 		// 目标在别的房间/房子 → 拒绝
 		if (seat.TerritoryId != _clientState.TerritoryType)
 		{
@@ -233,6 +247,9 @@ public sealed class MovementController : IDisposable
 
 	/// <summary>当前正在去坐的座位(供上层把“实际坐到了哪”告知模型)。</summary>
 	public SeatPoint? CurrentSitSeat => _sitSeat;
+
+	/// <summary>上一次 SitOnSeat 是否“已经在目标座位上、不用动”(供上层回不同的话)。</summary>
+	public bool SitNoOp { get; private set; }
 
 	/// <summary>当前状态文本(命令/UI/网页显示)</summary>
 	public string StatusText()

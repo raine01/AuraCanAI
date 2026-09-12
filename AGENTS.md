@@ -684,3 +684,15 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 3. **别频繁切状态**:`StateMachine.DescribeStateForAi` 用法段加“对方没要求、处境也没变就保持当前状态;一轮最多切一次”。
 4. **皮下有自己的事**:人设里加“有时候说说自己正在干的事(还差一小时下班/等队友/熬夜),不用每句都只接对方的话”。
 - 另:历史重复 bug 同批修复(见上一节,先登记再发送)——这是“对话不自然”的主要根因。
+
+## 「她坐着没动」(2026-09-12,用户实测)
+- 日志:用户说「你坐我对面, 感觉这么看你视角不太舒服」→ 模型调 `rp_body_action(sit, target=奥·乌儿, side=near)`
+  → 程序解析出的却是**她正坐着的那把椅子**(离目标玩家最近)→ `GetSeatedState()==true` → 跳过 /sit → 「坐正 0.00m」
+  → 没动;但台词说了「我往旁边挪挪」→ 自相矛盾。
+- 根因:选座没排除“自己正坐的那个”(IsSeatOccupied 排除自己,所以当前座位永远算“空”)。
+- 修复:
+  - 新增 `AuraCanAiCore.SeatUnderPlayer()`(本地玩家 ≤0.8m 内的座位记录)。
+  - `ResolveSeatForSittingCore`:**优先排除当前坐着的座位**(无其它候选才退回它);nearest-to-self 与 player 两条分支都做了。
+  - `MovementController`:新增 `SitNoOp`;若解析到的就是当前座位 → 不动并标记。
+  - `ExecuteBodyActionCore` 的 sit:若 `SitNoOp` → 回“你已经坐在 {方位} 了,旁边没有别的空座,这次不用动”,避免台词乱承诺。
+- 备注:待机动作轮换需要**在状态机情景里配动作**(当前配置四个情景 actions 全是空 → 她不会自己动)。

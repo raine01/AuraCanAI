@@ -1121,19 +1121,23 @@ public class AuraCanAiCore : IDisposable
 		if (houseSeats.Count == 0) { error = $"房子「{house.Name}」还没记录座位(去坐一下再 /aca seatadd)"; return null; }
 
 		var sel = (selector ?? "").Trim();
+		// 已坐着的那个座位优先排除(否则“挪一挪/换个边”会解析回原地,人不会动)
+		var curSeat = SeatUnderPlayer();
+		bool IsCur(SeatPoint s) => curSeat != null && s.Id == curSeat.Id && s.HouseId == curSeat.HouseId;
 		// 最近空座:同房间优先
 		if (sel.Length == 0)
 		{
 			var local = _objectTable.LocalPlayer;
 			if (local == null) { error = "未登录/无玩家"; return null; }
 			var tid = _clientState.TerritoryType;
-			var cand = houseSeats
-				.Where(s => s.TerritoryId == tid && !IsSeatOccupied(s))
-				.OrderBy(s => PlaneDist2D(local.Position, s))
-				.FirstOrDefault();
+			var pool = houseSeats.Where(s => s.TerritoryId == tid && !IsSeatOccupied(s)).OrderBy(s => PlaneDist2D(local.Position, s)).ToList();
+			var alt = pool.Where(s => !IsCur(s)).ToList();
+			var cand = (alt.Count > 0 ? alt : pool).FirstOrDefault();
 			if (cand == null)
 			{
-				cand = houseSeats.Where(s => !IsSeatOccupied(s)).OrderBy(s => PlaneDist2D(local.Position, s)).FirstOrDefault();
+				var pool2 = houseSeats.Where(s => !IsSeatOccupied(s)).OrderBy(s => PlaneDist2D(local.Position, s)).ToList();
+				var alt2 = pool2.Where(s => !IsCur(s)).ToList();
+				cand = (alt2.Count > 0 ? alt2 : pool2).FirstOrDefault();
 				if (cand == null) { error = "当前房子没有可用空座(都在别处或被占)"; return null; }
 			}
 			return cand;
@@ -1157,11 +1161,13 @@ public class AuraCanAiCore : IDisposable
 				.OrderBy(s => PlaneDist2D(player.Position, s))
 				.ToList();
 			if (free.Count == 0) { error = $"{sel} 旁边没有可坐的空座(当前房间的座位都有人/离太远)"; return null; }
+			var pool = free.Where(s => !IsCur(s)).ToList();
+			if (pool.Count == 0) pool = free; // 旁边只剩自己正坐着的那把 → 只好在原地
 			var sideKey = NormalizeSide(side);
 			SeatPoint? cand = null;
 			if (sideKey.Length > 0 && sideKey != "near")
-				cand = free.FirstOrDefault(s => SeatOnSide(s, player, sideKey)); // 该侧没空座 → 退回最近空座
-			cand ??= free[0];
+				cand = pool.FirstOrDefault(s => SeatOnSide(s, player, sideKey)); // 该侧没空座 → 退回最近空座
+			cand ??= pool[0];
 			var dPlayer = PlaneDist2D(player.Position, cand);
 			if (dPlayer > 6f)
 			{
@@ -1184,6 +1190,24 @@ public class AuraCanAiCore : IDisposable
 	{
 		var dx = a.X - s.X; var dz = a.Z - s.Z;
 		return MathF.Sqrt(dx * dx + dz * dz);
+	}
+
+	/// <summary>本地玩家当前正坐在哪个记录座位上(按位置 ≤ 0.8m 判断);没坐着/找不到返回 null。需框架线程。</summary>
+	public SeatPoint? SeatUnderPlayer()
+	{
+		try
+		{
+			var local = _objectTable.LocalPlayer;
+			if (local == null) return null;
+			var tid = _clientState.TerritoryType;
+			var house = EnsureSceneState();
+			return _config.Seats
+				.Where(s => (house == null || s.HouseId == house.Id) && s.TerritoryId == tid)
+				.Where(s => PlaneDist2D(local.Position, s) <= 0.8f)
+				.OrderBy(s => PlaneDist2D(local.Position, s))
+				.FirstOrDefault();
+		}
+		catch { return null; }
 	}
 
 	/// <summary>当前小队成员清洗名集合(含自己;通过 GroupManager 成员 EntityId 反查 ObjectTable 名字)。
@@ -2555,6 +2579,10 @@ public class AuraCanAiCore : IDisposable
 					// 座位由程序选好;只把“坐到了什么方位”告知模型(不给座位编号,避免模型念出来)
 					var seat = m.CurrentSitSeat;
 					var sideDesc = (seat != null && !string.IsNullOrEmpty(target)) ? DescribeSeatSide(seat, target) : "";
+					if (m.SitNoOp)
+						return sideDesc.Length > 0
+							? $"你已经坐在 {sideDesc} 了,旁边没有别的空座,这次不用动"
+							: "你已经坐在原来的位置了,不用动";
 					return sideDesc.Length > 0
 						? $"开始走到 {sideDesc} 的空座坐下"
 						: "开始走到附近一个空座坐下";
