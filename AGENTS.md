@@ -742,3 +742,9 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - 新增参数 `DescribeStateForAi(bool switchToolEnabled = true)`:调用处传 `ToolEnabled(AiToolCatalog.SwitchState)`,
   这样用户在工具集里取消了 `switch_state` 时,提示词也不再提切换(与实际可用工具一致)。
 - ⚠️ 记住:工具枚举(enum)与提示词都必须与实际勾选一致,否则模型会去调不存在的工具。
+
+## 工具集去掉 switch_state(2026-09-12,用户口径)
+- `AiToolCatalog.All` **移除 `(SwitchState, "切换状态")`**(常量保留);`switch_state` 完全由“有无通路”自动决定,
+  不由用户勾选:有可切换状态 → 给工具 + 提示词列可达状态;无通路 → 工具不加入、提示词不提切换。
+- `ToolEnabled("switch_state")` 直接返回 true(它不在 tools 列表里,不能按“未勾选”过滤掉)。
+- 旧的 tools 列表里若残留 `switch_state`,启动时会被清洗掉(EnsureStateMachineState / SaveStateMachineJson 都按目录白名单过滤)。

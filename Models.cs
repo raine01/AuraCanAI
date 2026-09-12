@@ -107,7 +107,8 @@ public class SmState
 	public List<string> tools { get; set; } = new(); // 该状态下 AI 可用的工具名(空 = 全开);见 AiToolCatalog
 }
 
-/// <summary>AI 可用工具目录(状态机里按状态勾选“这个状态下允许用哪些工具”;空 = 全开)。</summary>
+/// <summary>AI 可用工具目录(状态机里按状态勾选“这个状态下允许用哪些工具”;空 = 全开)。
+/// ⚠️ `switch_state` **不在这里**:它由“有没有可切换到的状态”自动决定(有通路就给、没通路就不给),不需要用户勾。</summary>
 public static class AiToolCatalog
 {
 	public const string BodyAction = "rp_body_action";
@@ -128,7 +129,6 @@ public static class AiToolCatalog
 		(ListSeats, "查看可坐座位"),
 		(IdleAction, "做本状态的待机动作"),
 		(RoleEmote, "做角色自定义动作"),
-		(SwitchState, "切换状态"),
 		(PartyAction, "组队（邀请/接受/退队）"),
 		(LeaveScene, "离开场地（退到人少处）"),
 	};

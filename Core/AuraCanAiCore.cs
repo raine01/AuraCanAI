@@ -1661,10 +1661,16 @@ public class AuraCanAiCore : IDisposable
 				changed = true;
 			}
 			s.LegacyMoods = null;
+			var known = AiToolCatalog.AllNames();
 			foreach (var st in s.states)
 			{
 				if (st.nextStateIds == null) st.nextStateIds = new List<int>();
-				if (st.tools == null) { st.tools = AiToolCatalog.AllNames(); changed = true; } // 旧数据没工具字段 → 默认全开
+				if (st.tools == null) { st.tools = new List<string>(known); changed = true; } // 旧数据没工具字段 → 默认全开
+				else
+				{
+					var cleaned = st.tools.Where(n => known.Contains(n)).Distinct().ToList();
+					if (cleaned.Count != st.tools.Count) { st.tools = cleaned; changed = true; }
+				}
 			}
 		}
 		// ⑤ 当前状态机有效
@@ -2565,6 +2571,7 @@ public class AuraCanAiCore : IDisposable
 	/// (空列表 = 用户把工具全关了这个状态就是不用工具;工具集在网页「状态机 → 状态编辑 → 工具集」勾选)</summary>
 	private bool ToolEnabled(string toolName)
 	{
+		if (toolName == AiToolCatalog.SwitchState) return true; // switch_state 不在工具集里,由“有无通路”自动决定
 		if (!_config.StateMachineEnabled || State == null) return true;
 		var t = State.CurrentState?.tools;
 		return t == null || t.Contains(toolName);
@@ -3532,6 +3539,7 @@ public class AuraCanAiCore : IDisposable
 					st.actions.RemoveAll(a => a == null || (string.IsNullOrWhiteSpace(a.name) && string.IsNullOrWhiteSpace(a.emote)));
 					if (st.nextStateIds == null) st.nextStateIds = new List<int>();
 					if (st.tools == null) st.tools = AiToolCatalog.AllNames();
+					else st.tools = st.tools.Where(n => AiToolCatalog.AllNames().Contains(n)).Distinct().ToList();
 				}
 				// 单向通道:只保留指向存在状态的 id、去自连/重复(不做双向)
 				var ids = set.states.Select(s => s.id).ToHashSet();
