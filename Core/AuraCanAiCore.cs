@@ -2778,10 +2778,11 @@ public class AuraCanAiCore : IDisposable
 		{
 			var line = lines[i];
 			var payload = isTell ? $"{replyAddress} {line}" : line;
+			// ⚠️ 先登记再发:聊天回显可能在同一帧内到达,RunCommand 返回后再登记就晚了
+			//(实测历史里同一句被存 2~3 遍——模型看到自己在复读,回复变机械)
+			lock (_historyLock) _recentSelfLines.Add((line, DateTime.Now));
 			var ok = RunCommand(cmd, payload);
 			Log($"LLM 台词已发({cmd},{i + 1}/{lines.Count}): {(ok ? "成功" : "失败(未登录等)")} | {line}");
-			if (ok)
-				lock (_historyLock) _recentSelfLines.Add((line, DateTime.Now));
 			if (i < lines.Count - 1) await Task.Delay(LineGapFor(line)); // 按字数模拟打字速度
 		}
 	}

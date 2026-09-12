@@ -666,3 +666,12 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - **一轮台词总字数上限 `LineTotalMaxChars=50`**:超出先按句末标点截断(取上限内最后一个句末标点;不足上限一半则硬截),丢失的内容不再发(日志「LLM 台词超长已截断」)。
 - **多条间隔按字数模拟打字**:`LineGapFor(line)=clamp(350 + 字数*70, 500, 3500)` ms(替代固定 650ms)。
 - 常量:`LineTotalMaxChars=50 / LineMaxLen=45 / LineMaxCount=3 / LineGapBaseMs=350 / LineGapPerCharMs=70 / LineGapMaxMs=3500`。
+
+## 历史重复 bug(2026-09-12,用户反馈“对话不自然”时定位)
+- 现象(日志实测):同一轮回复在上下文里出现 2~3 遍——整段一条 + 拆分后的每一条都进了历史;
+  模型看到自己在复读 → 回复变机械、不自然。
+- 根因:多条拆发时**发完才登记** `_recentSelfLines`;而游戏聊天回显可能在同一帧就回来,
+  登记晚一步 → 每条拆出的都被当新消息写进历史(旧单条版本同样是 RunCommand 之后再登记的隐患)。
+- 修复:`AppendAssistantAndEchoAsync` 循环里改为**先登记再 RunCommand**。
+- ⚠️ 凡是“发消息 → 靠回显去重”的写法,登记必须在发送之前(记住这条)。
+- 排查工具:`node tools/inspect-bodyreq.js N`(会标出重复项)。
