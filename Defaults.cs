@@ -114,6 +114,7 @@ public static class Defaults
 			roleName = "皮下",
 			actions = new List<IdleAction>(),
 			nextStateIds = new List<int> { 2 },
+			tools = AiToolCatalog.AllNames(),
 		},
 		new SmState
 		{
@@ -123,6 +124,7 @@ public static class Defaults
 			roleName = "白屿涟音",
 			actions = new List<IdleAction>(),
 			nextStateIds = new List<int> { 1 },
+			tools = AiToolCatalog.AllNames(),
 		},
 	};
 

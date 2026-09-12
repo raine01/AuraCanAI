@@ -1661,6 +1661,11 @@ public class AuraCanAiCore : IDisposable
 				changed = true;
 			}
 			s.LegacyMoods = null;
+			foreach (var st in s.states)
+			{
+				if (st.nextStateIds == null) st.nextStateIds = new List<int>();
+				if (st.tools == null) { st.tools = AiToolCatalog.AllNames(); changed = true; } // 旧数据没工具字段 → 默认全开
+			}
 		}
 		// ⑤ 当前状态机有效
 		var set = _config.SmSets.FirstOrDefault(s => s.id == _config.SmCurrentSetId);
@@ -1689,9 +1694,10 @@ public class AuraCanAiCore : IDisposable
 			roleName = m.scenes.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.roleName))?.roleName ?? "",
 			actions = m.scenes.SelectMany(s => s.actions ?? new List<IdleAction>())
 				.GroupBy(a => string.IsNullOrWhiteSpace(a.name) ? a.emote : a.name).Select(g => g.First()).ToList(),
+			tools = AiToolCatalog.AllNames(),
 		}).ToList();
 		var ids = states.Select(s => s.id).ToList();
-		foreach (var s in states) s.nextStateIds = ids.Where(i => i != s.id).ToList();
+		foreach (var s in states) s.nextStateIds = ids.Where(i => i != s.id).ToList(); // 迁移后默认全部勾选
 		return states;
 	}
 
@@ -2546,7 +2552,22 @@ public class AuraCanAiCore : IDisposable
 				["op"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "invite", "accept", "leave" } },
 				["target"] = new JObject { ["type"] = "string", ["description"] = "invite 时填要邀请的玩家名;accept/leave 可空" },
 			}, new[] { "op" }));
+		// 按当前状态勾选的工具集过滤(状态机开启时;该状态 tools 为空 = 全开)
+		for (var i = tools.Count - 1; i >= 0; i--)
+		{
+			var tn = tools[i]?["function"]?["name"]?.ToString() ?? "";
+			if (tn.Length > 0 && !ToolEnabled(tn)) tools.RemoveAt(i);
+		}
 		return tools;
+	}
+
+	/// <summary>该工具在当前状态下是否启用:状态机关闭 → 全开;当前状态 tools 为 null → 全开(旧数据)。
+	/// (空列表 = 用户把工具全关了这个状态就是不用工具;工具集在网页「状态机 → 状态编辑 → 工具集」勾选)</summary>
+	private bool ToolEnabled(string toolName)
+	{
+		if (!_config.StateMachineEnabled || State == null) return true;
+		var t = State.CurrentState?.tools;
+		return t == null || t.Contains(toolName);
 	}
 
 	/// <summary>执行身体动作(框架线程调度),返回中文结果描述(供补台词请求引用);动作未知返回 null(不补台词)。</summary>
@@ -3481,6 +3502,7 @@ public class AuraCanAiCore : IDisposable
 			currentStateId = _config.SmCurrentStateId,
 			sets = _config.SmSets,
 			roles = _llmSetting.roles.Select(r => r.name).ToList(),
+			toolCatalog = AiToolCatalog.All.Select(x => new { name = x.Name, label = x.Label }).ToList(),
 			armed = new { setId = State.ArmedSetId, stateId = State.ArmedStateId, name = State.ArmedActionName },
 			currentRole = GetActiveRoleName(),
 			result = "success",
@@ -3509,16 +3531,12 @@ public class AuraCanAiCore : IDisposable
 					if (st.actions == null) st.actions = new List<IdleAction>();
 					st.actions.RemoveAll(a => a == null || (string.IsNullOrWhiteSpace(a.name) && string.IsNullOrWhiteSpace(a.emote)));
 					if (st.nextStateIds == null) st.nextStateIds = new List<int>();
+					if (st.tools == null) st.tools = AiToolCatalog.AllNames();
 				}
-				// 只保留有效 id、去自连,并把「互通」做成双向(前端勾一边=两边通)
+				// 单向通道:只保留指向存在状态的 id、去自连/重复(不做双向)
 				var ids = set.states.Select(s => s.id).ToHashSet();
 				foreach (var st in set.states)
 					st.nextStateIds = st.nextStateIds.Where(i => ids.Contains(i) && i != st.id).Distinct().ToList();
-				foreach (var st in set.states)
-					foreach (var other in set.states)
-						if (other.nextStateIds.Contains(st.id)) st.nextStateIds.Add(other.id);
-				foreach (var st in set.states)
-					st.nextStateIds = st.nextStateIds.Where(i => i != st.id).Distinct().ToList();
 			}
 			if (sets.Count == 0) sets.Add(new SmSet { id = 1, name = "白屿涟音", states = new List<SmState>() });
 			_config.SmSets = sets;

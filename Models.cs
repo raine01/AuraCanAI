@@ -103,7 +103,37 @@ public class SmState
 	public string desc { get; set; } = ""; // 给 AI 的说明:什么时候该处于这个状态
 	public string roleName { get; set; } = ""; // 该状态使用的人设(角色设定里的角色名;空 = 不演角色,照常聊天)
 	public List<IdleAction> actions { get; set; } = new(); // 待机动作列表(名称/动作/冷却/位置)
-	public List<int> nextStateIds { get; set; } = new(); // 允许切换到的状态(互通:存双向)
+	public List<int> nextStateIds { get; set; } = new(); // 允许切换到的状态(**单向**:只列出从这里能切过去的状态)
+	public List<string> tools { get; set; } = new(); // 该状态下 AI 可用的工具名(空 = 全开);见 AiToolCatalog
+}
+
+/// <summary>AI 可用工具目录(状态机里按状态勾选“这个状态下允许用哪些工具”;空 = 全开)。</summary>
+public static class AiToolCatalog
+{
+	public const string BodyAction = "rp_body_action";
+	public const string FacePlayer = "face_player";
+	public const string LookupPlayer = "lookup_player";
+	public const string ListSeats = "list_seats";
+	public const string IdleAction = "rp_idle_action";
+	public const string RoleEmote = "rp_emote";
+	public const string SwitchState = "switch_state";
+	public const string PartyAction = "party_action";
+	public const string LeaveScene = "leave_scene";
+
+	public static readonly (string Name, string Label)[] All =
+	{
+		(BodyAction, "身体动作（走近/跟随/走开/面向/停下/坐）"),
+		(FacePlayer, "转身看向某人"),
+		(LookupPlayer, "查看在场玩家（谁在场/谁在看你）"),
+		(ListSeats, "查看可坐座位"),
+		(IdleAction, "做本状态的待机动作"),
+		(RoleEmote, "做角色自定义动作"),
+		(SwitchState, "切换状态"),
+		(PartyAction, "组队（邀请/接受/退队）"),
+		(LeaveScene, "离开场地（退到人少处）"),
+	};
+
+	public static List<string> AllNames() => All.Select(x => x.Name).ToList();
 }
 
 /// <summary>待机动作(每个状态一份):名称 / 动作(游戏表情名) / 冷却(秒,也是自动轮换间隔) / 位置(可空)。

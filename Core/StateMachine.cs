@@ -47,15 +47,13 @@ public sealed class StateMachine
 	/// <summary>当前状态使用的角色名(未设置返回空串)。</summary>
 	public string CurrentStateRole => CurrentState?.roleName ?? "";
 
-	/// <summary>当前状态允许切换到的状态(互通:自己的勾选 ∪ 对方勾了自己;排除自己)。空 = 不能切。</summary>
+	/// <summary>当前状态允许切换到的状态(**单向**:只看自己的 nextStateIds)。空 = 不能切。</summary>
 	public List<SmState> AllowedStates()
 	{
 		var set = CurrentSet;
 		var cur = CurrentState;
 		if (set == null || cur == null) return new List<SmState>();
 		var ids = new HashSet<int>(cur.nextStateIds ?? new List<int>());
-		foreach (var s in set.states)
-			if (s.id != cur.id && (s.nextStateIds?.Contains(cur.id) ?? false)) ids.Add(s.id);
 		ids.Remove(cur.id);
 		return set.states.Where(s => ids.Contains(s.id)).ToList();
 	}
@@ -314,7 +312,7 @@ public sealed class StateMachine
 		sb.Append("- 什么时候算「变了」以各状态的说明(—— 后面那段)为准。例:说明里提到「以角色身份/角色扮演/上皮」的状态,就是有人要求你进入角色时要切过去的那个;提到「没有在扮演角色/皮下」的状态,就是对方出戏、要聊现实或游戏本身时切过去的那个。\n");
 		sb.Append("- 别人要求你切换身份/进入角色/出戏时,不要拒绝、不要解释、也不要反问,直接调用工具切过去,再按新状态的口吻说话。\n");
 		sb.Append("- 但**别频繁来回切**:对方没要求、处境也没变,就保持在当前状态;一轮最多切一次。\n");
-		sb.Append("- 只能切到「可切换到的状态」列出的那几个;切不过去就保持原状态,不要说“我换好了”。\n");
+		sb.Append("- 只能切到「可切换到的状态」列出的那几个(单向通道);切不过去就保持原状态,不要说“我换好了”。\n");
 		sb.Append("动作绝不写进台词。");
 		return sb.ToString();
 	}

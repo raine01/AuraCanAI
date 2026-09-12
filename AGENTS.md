@@ -720,3 +720,17 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - 前端 `character.html`:去掉情景层;页签(多套)+ **单排状态节点图**(互通画上方虚弧线)+ 状态编辑(名称/说明/人设/勾选互通/动作)。
   按钮 `+ 状态`;复选框 `sm-link` 勾选时**同时改两边**的 nextStateIds。
 - ⚠️ 待实机:旧配置应自动坍缩成 皮下/皮上 两个互通状态;日志 `[状态机] 状态 → X(人设: Y)`;切不过去时工具会回“没有勾选互通”。
+
+## 状态机:单向箭头 + 按状态选工具集(2026-09-12 二次调整)
+- **单向通道**(用户口径:有些状态不能逆向流转):`AllowedStates()` 只取当前状态自己的 `nextStateIds`(不再与反向求并集);
+  `SaveStateMachineJson` 不再规范成双向,只过滤“指向不存在/自连/重复”。前端 `sm-link` 勾选**只改本状态**。
+- **节点图改成有向箭头**:`<marker id="smArrow">` + 二次贝塞尔弧;向右的走上方弧、向左的走下方弧(避免两条重叠)。
+  提示文案:箭头=可切换方向(单向)。
+- **工具集**(用户口径:function tools 做成工具集供用户选择,默认新状态全勾):
+  - `AiToolCatalog`(Models.cs):工具名 + 中文标签,9 个:rp_body_action / face_player / lookup_player / list_seats /
+    rp_idle_action / rp_emote / switch_state / party_action / leave_scene。
+  - `SmState.tools`(List<string>);新建状态 = `AiToolCatalog.AllNames()`(全选);迁移(旧两层)也全选;旧数据 null → AllNames。
+  - 后端 `AuraCanAiCore.ToolEnabled(name)`:`BuildBodyActionTools` 返回前按当前状态过滤(状态机关闭 → 全开;tools 为 null → 全开;
+    **空列表 = 该状态禁用了全部工具**)。
+  - `GetStateMachineJson` 返回 `toolCatalog` 供前端渲染;状态编辑面板加「工具集」勾选行(`sm-tool`)。
+- ⚠️ 注意:`switch_state` 也在工具集里,若某个状态把工具全取消,AI 在该状态下就切不出去(用户可自行取舍)。
