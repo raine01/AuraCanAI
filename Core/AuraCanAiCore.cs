@@ -3546,10 +3546,12 @@ public class AuraCanAiCore : IDisposable
 			if (parsed["enabled"] != null) _config.StateMachineEnabled = parsed["enabled"]!.Value<bool>();
 			if (parsed["currentSetId"] != null && _config.SmSets.Any(s => s.id == parsed["currentSetId"]!.Value<int>()))
 				_config.SmCurrentSetId = parsed["currentSetId"]!.Value<int>();
-			// 校准当前状态机/状态
+			// 校准当前状态机/状态(关掉开关也回到默认第一个状态)
 			var set2 = _config.SmSets.FirstOrDefault(s => s.id == _config.SmCurrentSetId) ?? _config.SmSets[0];
 			_config.SmCurrentSetId = set2.id;
-			var st2 = set2.states.FirstOrDefault(m => m.id == _config.SmCurrentStateId) ?? set2.states.FirstOrDefault();
+			var st2 = _config.StateMachineEnabled
+				? (set2.states.FirstOrDefault(m => m.id == _config.SmCurrentStateId) ?? set2.states.FirstOrDefault())
+				: set2.states.FirstOrDefault();
 			_config.SmCurrentStateId = st2?.id ?? 0;
 			SaveConfig();
 				ResetChatHistory();
@@ -3594,6 +3596,9 @@ public class AuraCanAiCore : IDisposable
 		{
 			var en = JObject.Parse(json)["enabled"]?.Value<bool>() ?? false;
 			_config.StateMachineEnabled = en;
+			// 关闭开关也回到默认(第一个)状态
+			if (!en)
+				_config.SmCurrentStateId = _config.SmSets.FirstOrDefault(s => s.id == _config.SmCurrentSetId)?.states.FirstOrDefault()?.id ?? 0;
 			SaveConfig();
 				ResetChatHistory();
 			var active = GetActiveRoleName();

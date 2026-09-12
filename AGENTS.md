@@ -815,3 +815,54 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - **删掉手写命令**:`/aca smstate`(手动强制切)、`/aca smreset`(重置默认示例)及其方法 `ResetStateMachine()`;
   帮助串里「状态机:」段改为「无子指令」。`ForceSetState()` 保留(被闲置重置用)。
   (「还原默认角色设定与状态机」仍在前端网页按钮里。)
+
+# ===== 状态机现状(2026-09-12 定稿,新会话先读这段) =====
+
+**目标口径**:让 AI 按处境切换"身份";程序该做的事不要交给模型;对模型隐藏"状态机"这个机制词。
+
+## 数据结构(`Models.cs` / `Configuration.cs`)
+- `SmSet { id, name, states[] }`(多套,前端页签切换);`Configuration.SmSets / SmCurrentSetId / SmCurrentStateId`。
+- `SmState { id, name, desc, roleName, nextStateIds[], tools[] }`
+  - `nextStateIds` = **单向**可切换目标(只列自己能去的);空 = 切不出去。
+  - `tools` = 该状态下启用的 AI 工具名(`AiToolCatalog.AllNames()` 全选;`null` 视为全开;**空列表 = 禁用全部**)。
+- `AiToolCatalog`(工具集目录,6 项):`rp_body_action / face_player / lookup_player / rp_emote / leave_party / leave_scene`。
+  - ⚠️ `switch_identity` **不在目录里**,由"有无可切换身份"自动决定。
+- 旧两层(`SmMood`/`SmScene`/`LegacyMoods`)只用于启动迁移(`CollapseMoodsToStates`)。
+
+## 运行时(`Core/StateMachine.cs`)
+- `CurrentSet/CurrentState/AllowedStates()/SwitchState()`;`ForceSetState()`(绕过通路,程序内部用)。
+- `DescribeStateForAi(switchToolEnabled)`:注入 **`## 你现在的身份`**(不提"状态机/状态/通路"),只列"能换成的身份";无身份可换时整段不出现。
+- 待机动作/位置记录/自动轮换 **已全部删除**(`IdleAction` 类、`Tick`、`ArmPos`、`/aca pos`、`ArmIdlePos/ClearIdlePos` 都没了)。
+
+## 默认内容(`Defaults.cs`)
+- 三套人设:`白屿涟音`(茶道)、`皮下`(普通上班族/御姐/宅,第一人称碎片自述)、`皮下AI`(被当成AI时顺着演,DeepSeek/白米饭鲸鱼梗)。
+- 默认状态机(单套「白屿涟音」):`1 皮下`(人设皮下,→[2,3])、`2 皮上`(人设白屿涟音,→[1])、`3 被当成AI`(人设皮下AI,**→[] 无出口**)。
+- 前端工具集默认全选;迁移标记一堆:`DefaultRolesV2Added/SubskinPersonaV2~V4/AiStateAdded`。
+
+## 重置/初始状态规则(用户口径)
+1. **每次插件重载** → 当前状态 = 当前套第一个(`EnsureStateMachineState` 无条件设置)。
+2. **闲置 300 秒**(`IdleStateResetSec`)没有**其他人**说话 → `CheckIdleStateResetTick()`(500ms)回第一个。
+3. **关掉「启用状态机」开关**(前端开关走 `/SaveStateMachine`,不是 `SetStateMachineEnabled`) → 也回第一个。
+4. 无手写命令(`/aca smstate`、`/aca smreset` 已删);要重置整套配置用前端「还原默认角色设定与状态机」。
+
+## 前端(`Web/character.html` 顶部「状态机」区块)
+- 多套页签(+新建/✎改名/✕删除);单排状态节点图,**有向箭头**(向右走上弧/向左走下弧,`<marker id="smArrow">`);蓝=当前状态。
+- 点节点编辑:名称 / 人设下拉 / 给 AI 的说明 / **可切换到的状态(单向勾选)** / **工具集(6 项默认全选)**;编辑即自动保存(防抖 600ms)。
+- 无「设为当前」「刷新」按钮(状态切换交给 AI;数据变化靠 2s 轮询静默重载)。
+
+## 模型侧工具(最终形态)
+| 工具 | 作用 |
+|---|---|
+| `rp_body_action` | approach / follow / leave / sit(可带 side=left/right/front/back/near,程序选座)/ stop |
+| `face_player` | 转身看向某人(轻动作,info 循环) |
+| `lookup_player` | 在场玩家(空=列全+自身信息;带名=单个+是否看你) |
+| `rp_emote` | 角色自定义动作(有动作列表时才给) |
+| `leave_party` | 主动退队 |
+| `leave_scene` | 退场(走到人少处/坐下,60 秒静默自动退队) |
+| `switch_identity` | 换身份(自动,只在有可换身份时给) |
+> 已删:`list_seats`(选座交程序)、`rp_idle_action`(待机动作整体删)、`party_action`(改 leave_party)、`rp_body_action.face`(与 face_player 重复)。
+
+## 台词节奏(2026-09-12)
+- 拆条:按换行/强句末标点(`。！？!?`)拆,单条 ≤45 字,**一轮总量 ≤50 字**(超出按强句末截断,不认 `…`);最多 3 条。
+- 拟真打字:每条发送前先等 `clamp(400 + 字数×90, 600, 5000)` ms(日志 `LLM 台词待发(1/2,等 Nms 打字)`)。
+- 历史里只存整段一条;自身回显去重先登记再发送(`_recentSelfLines`)。
