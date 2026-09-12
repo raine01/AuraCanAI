@@ -806,3 +806,12 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - **逃生口**:新增 `/aca smstate [名称]`(`StateMachine.ForceSetState`)——手动强制切状态、不检查通路;
   不带名称=列出可用状态。因为「被当成AI」没有出口,只能靠命令(或改配置)回去。
 - ⚠️ 该状态下 `AllowedStates()` 为空 → `switch_identity` 工具不给、提示词里也没有换身份段 → 模型不知道自己能换(符合“不能切出”)。
+
+## 状态机默认状态重置(2026-09-12,用户口径)
+- **每次插件重载**都回到默认状态(当前套的**第一个** state):`EnsureStateMachineState` 里无条件把 `SmCurrentStateId = states[0].id`。
+- **闲置 300 秒**(`IdleStateResetSec`)没有任何**其他人**说话 → `CheckIdleStateResetTick()`(500ms tick)切回第一个 state
+  (经 `StateMachine.ForceSetState`,会重建上下文并打日志 `[状态机] 300 秒没人说话,已回到默认状态「皮下」`)。
+  计时基准 `_lastTalkAt`,在 `OnChatMessage` 里 `!isOwn` 时更新(与退队倒计时 `_leaveLastChatAt` 同处)。
+- **删掉手写命令**:`/aca smstate`(手动强制切)、`/aca smreset`(重置默认示例)及其方法 `ResetStateMachine()`;
+  帮助串里「状态机:」段改为「无子指令」。`ForceSetState()` 保留(被闲置重置用)。
+  (「还原默认角色设定与状态机」仍在前端网页按钮里。)

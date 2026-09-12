@@ -91,6 +91,7 @@ public class AuraCanAiCore : IDisposable
 	// 一次性系统事件提示(如加入/退出小队):下一轮请求注入一次即清空(与动作提示同 TTL)
 	private readonly List<(string Text, DateTime At)> _pendingSystemHints = new();
 	private const double ActionHintTtlSec = 20; // 现场提示最长存活秒数(超过就丢掉,不让旧动作跑到很久以后的对话里)
+	private DateTime _lastTalkAt = DateTime.Now; // 最近一次“别人说话”的时间(用于闲置回到默认状态)
 	// 小队解散清理 + 「离开」(AI 主动退场)
 	private bool _wasInParty; // 上次检测时是否在小队(用于检测解散/退出小队)
 	private bool _leaveArmed; // 「离开」已激活:等静默到时间自动退队
@@ -215,7 +216,7 @@ public class AuraCanAiCore : IDisposable
 		_clientState.Login += OnLogin;
 
 		// 定时器:500ms 注视检测 + 玩家进出 + 行为求值,2000ms 入场播报(回调切回游戏主线程访问 ObjectTable)
-		_timer500 = new Timer(_ => _framework.RunOnFrameworkThread(() => SafeTick(() => { CheckLookingAndPlayers(); Behaviors?.Tick(); RoleActions?.Tick(); CheckPartyStateTick(); CheckLeavePartyTick(); ReplyTick(); })), null, 0, 500);
+		_timer500 = new Timer(_ => _framework.RunOnFrameworkThread(() => SafeTick(() => { CheckLookingAndPlayers(); Behaviors?.Tick(); RoleActions?.Tick(); CheckPartyStateTick(); CheckLeavePartyTick(); CheckIdleStateResetTick(); ReplyTick(); })), null, 0, 500);
 		_timer2000 = new Timer(_ => _framework.RunOnFrameworkThread(() => SafeTick(CheckNewPlayers)), null, 2000, 2000);
 
 		// 行为设置引擎:从配置编译规则(UI 增删改后重新 Reload)
@@ -415,7 +416,7 @@ public class AuraCanAiCore : IDisposable
 						|| channelNo == "0C";
 
 			ChatVoiceHandler(channelNo, cleanName, text, isOwn);
-			if (!isOwn) _leaveLastChatAt = DateTime.Now; // 「离开」倒计时:别的任何人说话都重置(自己的话不算)
+			if (!isOwn) { _leaveLastChatAt = DateTime.Now; _lastTalkAt = DateTime.Now; } // 「离开」倒计时/闲置回默认状态:别人说话就重置(自己的话不算)
 			ChatLLMHandler(channelNo, cleanName, text, isOwn, replyAddress);
 			ChatWsHandler(channelNo, cleanName, text, isOwn, replyAddress);
 			// 最近接触用户:悄悄话(0C 我方发出 / 0D 收到,Sender 即对方)
@@ -1701,13 +1702,10 @@ public class AuraCanAiCore : IDisposable
 		// ⑤ 当前状态机有效
 		var set = _config.SmSets.FirstOrDefault(s => s.id == _config.SmCurrentSetId);
 		if (set == null) { _config.SmCurrentSetId = _config.SmSets[0].id; set = _config.SmSets[0]; changed = true; }
-		// ⑥ 当前状态有效(旧配置从 SmCurrentMoodId 迁移过来;mood.id → state.id 不变)
-		if (_config.SmCurrentStateId <= 0) { _config.SmCurrentStateId = _config.SmCurrentMoodId; changed = true; }
-		if (set.states.All(s => s.id != _config.SmCurrentStateId))
-		{
-			_config.SmCurrentStateId = set.states.FirstOrDefault()?.id ?? 0;
-			changed = true;
-		}
+		// ⑥ 每次加载都回到默认状态(第一个):用户口径“每次重载就置成默认状态”
+		var firstState = set.states.FirstOrDefault();
+		var firstId = firstState?.id ?? 0;
+		if (_config.SmCurrentStateId != firstId) { _config.SmCurrentStateId = firstId; changed = true; }
 		if (changed) try { _config.Save(_pi); } catch { }
 	}
 
@@ -3068,6 +3066,7 @@ public class AuraCanAiCore : IDisposable
 	// ==================== 小队解散清理 + 「离开」(AI 主动退场)(2026-09-11) ====================
 
 	private const double LeaveQuietSec = 60; // 「离开」激活后:多久没人说话就自动退队(秒)
+	private const double IdleStateResetSec = 300; // 闲置多久没人说话就回到默认(第一个)状态(秒)
 	private const float LeaveQuietClearance = 4f; // 「人少」判定:离最近的其他玩家至少几米
 	private const float LeaveAlreadyQuietRadius = 10f; // 离最近的人已经这么远 → 不用再挪窝
 
@@ -3098,6 +3097,17 @@ public class AuraCanAiCore : IDisposable
 		_lastSpeakAddr = "";
 		_leaveArmed = false;
 		Log("小队已解散/退出小队:已清空对话上下文、动作队列、现场提示");
+	}
+
+	/// <summary>闲置回到默认状态(500ms tick):连续 IdleStateResetSec 秒没有任何其他人说话 → 切回当前状态机的第一个状态。</summary>
+	private void CheckIdleStateResetTick()
+	{
+		if (!_config.StateMachineEnabled || State == null) return;
+		if ((DateTime.Now - _lastTalkAt).TotalSeconds < IdleStateResetSec) return;
+		var first = State.CurrentSet?.states.FirstOrDefault();
+		if (first == null || _config.SmCurrentStateId == first.id) return;
+		State.ForceSetState(first.name);
+		Log($"[状态机] {IdleStateResetSec:0} 秒没人说话,已回到默认状态「{first.name}」");
 	}
 
 	/// <summary>「离开」倒计时(500ms tick):激活后若有 60 秒没有任何其他人发言 → 主动退出小队。</summary>
@@ -3483,18 +3493,6 @@ public class AuraCanAiCore : IDisposable
 		RoleActions?.Reset();
 		ResetChatHistory();
 		return new { message = "LLM配置已重置为默认(DeepSeek Key 保留)", result = "success" };
-	}
-
-	/// <summary>把状态机重置为默认示例(单套「白屿涟音」:皮下/皮上)。/aca smreset</summary>
-	public string ResetStateMachine()
-	{
-		_config.SmSets = new List<SmSet> { new() { id = 1, name = "白屿涟音", states = Defaults.DefaultStateMachine() } };
-		_config.SmCurrentSetId = 1;
-		_config.SmCurrentStateId = _config.SmSets[0].states[0].id;
-		SaveConfig();
-		ResetChatHistory();
-		Log("[状态机] 已重置为默认示例(单套「白屿涟音」)");
-		return "状态机已重置为默认示例:单套「白屿涟音」(皮下/皮上)";
 	}
 
 	// ==================== 状态机(HTTP:前端 character.html 顶部视图) ====================
