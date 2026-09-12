@@ -637,8 +637,8 @@
 				return { m: m, w: Math.max(moodW, n * sceneW + (n - 1) * sceneGap) };
 			});
 			var totalW = groups.reduce(function(a, g) { return a + g.w; }, 0) + groupGap * Math.max(0, groups.length - 1);
-			var x = Math.max(16, (W - totalW) / 2);
-			var moodY = 34, sceneY = 158;
+			var x = Math.max(58, (W - totalW) / 2);
+			var moodY = 34, sceneY = 168;
 			var nodes = [], edges = [];
 			groups.forEach(function(g) {
 				var m = g.m, scenes = m.scenes || [];
@@ -666,6 +666,11 @@
 				x += g.w + groupGap;
 			});
 			var parts = [];
+			// 分隔虚线 + 左侧行标(状态=第一层 / 情景=第二层)
+			var sepY = (moodY + moodH + sceneY) / 2;
+			parts.push('<line x1="0" y1="' + sepY + '" x2="' + W + '" y2="' + sepY + '" stroke="#c2cddb" stroke-width="1" stroke-dasharray="6 4"/>');
+			parts.push('<text x="8" y="' + (moodY + moodH / 2 + 4) + '" font-size="12" fill="#adb5bd">状态</text>');
+			parts.push('<text x="8" y="' + (sceneY + sceneH / 2 + 4) + '" font-size="12" fill="#adb5bd">情景</text>');
 			edges.forEach(function(e) {
 				if (e.type === 'tree') {
 					parts.push('<line x1="' + e.x1 + '" y1="' + e.y1 + '" x2="' + e.x2 + '" y2="' + e.y2 + '" stroke="#c2cddb" stroke-width="1.5"/>');

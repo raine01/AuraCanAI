@@ -558,3 +558,14 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - **默认状态机示例**:`Defaults.DefaultStateMachine()` = 1 个第一层「平常」+ 2 个第二层「待机/对话」,路径互指 → 节点图上呈**三角形**。`AuraCanAiCore` 构造里 `if (_config.SmMoods.Count == 0)` 种入并保存(删光后会再次种入,属预期)。
 - 视图改为 **SVG 节点图**(`#smGraph` + `smDrawGraph()`):第一层节点在上、其第二层节点在下,树边为实线、路径为虚弧线;蓝底=当前状态、浅蓝=选中;点节点在下方面板编辑(名称/说明/人设/路径/动作)。去掉了原来的 `#smMoodBar`/`#smSceneBar` 页签与 `#smMoodEditor`/`#smSceneEditor`,统一为 `#smEditor`。新增 `#smAddMoodBtn`(映射 `smAddMood`)/`#smAddSceneBtn`。
 - 图每次 `smRender`/输入改名/轮询都会重画(轮询 2s 只更新徽章+高亮,不动表单,避免抢焦点)。
+
+## 状态机默认与触发口径(2026-09-12 二次调整,用户口径)
+- **默认状态机**改为:第一层「皮下」(含 待机/接待)+「皮上」(含 待机/对话);皮下情景绑人设「皮下」、皮上绑「白屿涟音」。默认当前 = 皮下/待机。
+  - `IsLegacyDefaultStateMachine()`:SmMoods 为空,或仍是旧默认(单个「平常」+待机/对话、无动作无人设)→ 种入新默认(用户已改造过的不会被动)。
+- **默认人设加了第二份「皮下」**(`Defaults.DefaultRoleSettingSubskin`):一个普通国服 FF14 玩家的口吻(口语、聊游戏本身、不演角色)。
+  迁移:`Configuration.DefaultRolesV2Added`(只做一次)——角色列表里没有「皮下」就补上。
+- **说话开关口径**:`AuraCanAiCore.ShouldTriggerAi()` —— 状态机开启 → **只看「启用状态机」开关**,当前情景人设可空也能回话(空人设 = 不演角色,走 `RunChatTurnAsync` 的纯文字分支);状态机关闭 → 旧行为(「当前角色」有 setting 才回话)。
+  - `IsRolePlaying()` 改为 `StateMachineEnabled || 当前生效角色名非空`。
+  - `SendMsg` / `NotifyActionHint` 都改用 ShouldTriggerAi;`BuildRequestMessages`(无人设纯文字路径)也补上了场景+状态+事件提示注入(以前只有攒条提醒)。
+  - ⚠️ 纯文字分支**不带工具**(switch_mood/switch_scene/rp_idle_action 都不可用),所以空人设情景无法自主切状态——这是按“不演角色”口径的取舍;要切状态就给人设。
+- **节点图**:第一层/第二层之间加**横向虚线分隔**,左边缘标「状态」「情景」;节点布局左侧留 58px 给标签。默认示例不再是三角形(现在是两组节点)。

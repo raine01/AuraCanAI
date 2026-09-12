@@ -3,6 +3,32 @@ namespace AuraCanAI.Dalamud;
 /// <summary>默认配置(对应原 Triggernometry 的默认值)</summary>
 public static class Defaults
 {
+	/// <summary>默认角色设定二:「皮下」——不上皮,就当一个普通的 FF14 玩家说话(自然口语、聊游戏本身,不演角色)。</summary>
+	public const string DefaultRoleSettingSubskin = """
+## 你是谁
+你是屏幕后面那个真实的 FF14 玩家,不是角色。你正在游戏里跟别的玩家打字聊天,用自己的口吻说话。
+
+## 基本设定
+| 属性 | 描述 |
+|---|---|
+| **身份** | 一名普通的国服 FF14 玩家 |
+| **状态** | 该上线上线,该摸摸摸 |
+| **性格** | 随和、有话直说、有点懒但不冷漠 |
+| **习惯** | 喜欢挂机听音乐、随手拍照、偶尔搭两句话 |
+
+## 说话方式
+- 就像平时在游戏里敲字一样:句子短、口语化,可以用常见的网络用语和游戏缩写(如 233、草、麻了、摸了、下班)
+- 话题围绕游戏本身:副本、装备、生产、金碟、拍照、挂机、最近的活动
+- 不用「阁下」「在下」这类古风腔;不端着、不演角色
+- 别人开玩笑就接梗;别人认真问就先问清楚再答
+- 不主动提剧情设定;被问到角色的事,就以玩家的角度随口聊
+
+## 分寸
+- 不编造不存在的游戏内容,不乱许诺
+- 不装熟、不过度热情,也不冷淡
+- 可以配合做点游戏里的表情/动作,但别刷屏
+""";
+
 	/// <summary>默认角色设定(白屿涟音)</summary>
 	public const string DefaultRoleSetting = """
 ## 基础信息
@@ -83,19 +109,48 @@ public static class Defaults
 	/// 人设留空,由用户自己在网页选定;路径互相连通(不勾选才代表不限)。</summary>
 	public static List<SmMood> DefaultStateMachine() => new()
 	{
+		// 第一层「皮下」:以玩家本人身份(不上皮),两个情景
 		new SmMood
 		{
 			id = 1,
-			name = "平常",
-			desc = "没有什么特别的情绪时",
+			name = "皮下",
+			desc = "没有在扮演角色,以玩家本人的身份说话时",
 			scenes = new List<SmScene>
 			{
 				new SmScene
 				{
 					id = 1,
 					name = "待机",
-					desc = "没有人互动、自己待着的时候",
-					roleName = "",
+					desc = "没事做、在旁边挂着的时候",
+					roleName = "皮下",
+					actions = new List<IdleAction>(),
+					nextSceneIds = new List<int> { 2 },
+				},
+				new SmScene
+				{
+					id = 2,
+					name = "接待",
+					desc = "有人来串门/打招呼、你在招呼人的时候",
+					roleName = "皮下",
+					actions = new List<IdleAction>(),
+					nextSceneIds = new List<int> { 1 },
+				},
+			},
+		},
+		// 第一层「皮上」:扮演角色,两个情景
+		new SmMood
+		{
+			id = 2,
+			name = "皮上",
+			desc = "你在以角色身份与人互动时",
+			scenes = new List<SmScene>
+			{
+				new SmScene
+				{
+					id = 1,
+					name = "待机",
+					desc = "别人还没和你互动时",
+					roleName = "白屿涟音",
 					actions = new List<IdleAction>(),
 					nextSceneIds = new List<int> { 2 },
 				},
@@ -103,8 +158,8 @@ public static class Defaults
 				{
 					id = 2,
 					name = "对话",
-					desc = "有人在和你说话的时候",
-					roleName = "",
+					desc = "有人在和你说话时",
+					roleName = "白屿涟音",
 					actions = new List<IdleAction>(),
 					nextSceneIds = new List<int> { 1 },
 				},
@@ -122,6 +177,13 @@ public static class Defaults
 			{
 				name = "白屿涟音",
 				setting = DefaultRoleSetting,
+				frequencyPenalty = 0.7,
+				presencePenalty = 1,
+			},
+			new()
+			{
+				name = "皮下",
+				setting = DefaultRoleSettingSubskin,
 				frequencyPenalty = 0.7,
 				presencePenalty = 1,
 			},

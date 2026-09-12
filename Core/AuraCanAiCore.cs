@@ -128,12 +128,21 @@ public class AuraCanAiCore : IDisposable
 		}
 		SyncApiKeyFromConfig();
 		EnsureValidCurrentRole();
-		// 状态机首次使用:种一个默认示例(一个第一层 + 两个第二层,构成三角形)
-		if (_config.SmMoods.Count == 0)
+		// 状态机首次使用:种一个默认示例(皮下/皮上,各两个情景)
+		if (IsLegacyDefaultStateMachine())
 		{
 			_config.SmMoods = Defaults.DefaultStateMachine();
 			_config.SmCurrentMoodId = _config.SmMoods[0].id;
 			_config.SmCurrentSceneId = _config.SmMoods[0].scenes[0].id;
+			try { config.Save(pi); } catch { }
+		}
+		// 迁移:把默认「皮下」人设并入现有角色列表(只做一次;已存在则不重复)
+		if (!_config.DefaultRolesV2Added)
+		{
+			_config.DefaultRolesV2Added = true;
+			if (_llmSetting.roles.All(r => r.name != "皮下"))
+				_llmSetting.roles.Add(new Role { name = "皮下", setting = Defaults.DefaultRoleSettingSubskin, frequencyPenalty = 0.7, presencePenalty = 1 });
+			_config.SetLlmConfig(StripKey(_llmSetting));
 			try { config.Save(pi); } catch { }
 		}
 
@@ -1476,9 +1485,28 @@ public class AuraCanAiCore : IDisposable
 		return _llmSetting.currentRole ?? "";
 	}
 
-	/// <summary>是否处于「角色扮演中」:当前生效角色名非空即视为角色扮演中(状态机开启时 = 当前情景设置了人设)。
+	/// <summary>是否处于「角色扮演中」:启用状态机即视为角色扮演中;状态机关闭时回退旧行为(选中了「当前角色」)。
 	/// 行为「仅角色扮演时触发 / 角色扮演时不触发」判断用。纯配置读取,无游戏对象访问,不要求框架线程。</summary>
-	public bool IsRolePlaying() => !string.IsNullOrEmpty(GetActiveRoleName());
+	public bool IsRolePlaying() => _config.StateMachineEnabled || !string.IsNullOrEmpty(GetActiveRoleName());
+
+	/// <summary>是否应该触发 AI 回话:
+	///   状态机开启 → 只看「启用状态机」开关(当前情景人设可空;空人设 = 不演角色,但照常说话);
+	///   状态机关闭 → 旧行为(「当前角色」有人设设定才回话)。</summary>
+	public bool ShouldTriggerAi()
+	{
+		if (_config.StateMachineEnabled) return true;
+		return !string.IsNullOrEmpty(GetLLMRole(GetActiveRoleName()).setting);
+	}
+
+	/// <summary>是否是状态机首次使用(空)或旧默认示例(单个「平常」+ 待机/对话、无动作无人设)→ 种新默认。</summary>
+	private bool IsLegacyDefaultStateMachine()
+	{
+		if (_config.SmMoods.Count == 0) return true;
+		if (_config.SmMoods.Count != 1) return false;
+		var m = _config.SmMoods[0];
+		if (m.name != "平常" || m.scenes.Count != 2) return false;
+		return m.scenes.All(s => s.actions.Count == 0 && string.IsNullOrEmpty(s.roleName));
+	}
 
 	/// <summary>重建聊天上下文(换人设/换情景/切状态后用)。</summary>
 	public void ResetChatHistoryPublic() => ResetChatHistory();
@@ -1700,15 +1728,14 @@ public class AuraCanAiCore : IDisposable
 		lock (_historyLock) _chatHistory.Add(message);
 		if (msgRole != "user") return;
 		if (!triggerReply) return; // 仅上下文采集(情感动作等),不触发回复
-		// ⚠️ 无人设(当前生效角色无设定)时 AI 完全不触发(不回话、不请求),消息仅留在历史/网页。
-		var activeRole = GetActiveRoleName();
-		var roleNow = GetLLMRole(activeRole);
-		if (string.IsNullOrEmpty(roleNow.setting))
+		// 触发条件:状态机开启 → 只看开关(人设可空,空人设照常说话);状态机关闭 → 旧行为(当前角色有人设才回话)。
+		if (!ShouldTriggerAi())
 		{
 			if (!_noPersonaWarned)
 			{
 				_noPersonaWarned = true;
-				Log($"LLM 未触发:未选择人设(当前角色={(string.IsNullOrEmpty(activeRole) ? "空" : activeRole)});后续不再提示,选好角色即自动启用");
+				var ar = GetActiveRoleName();
+				Log($"LLM 未触发:未启用状态机且未选择人设(当前角色={(string.IsNullOrEmpty(ar) ? "空" : ar)});后续不再提示,启用状态机或选好角色即自动启用");
 			}
 			return;
 		}
@@ -1824,12 +1851,18 @@ public class AuraCanAiCore : IDisposable
 		List<Message> msgs;
 		lock (_historyLock) msgs = _chatHistory.ToList();
 		// 注入提示一律拼到最后(与 BuildTurnMessages 同口径:注入的 system 只有最后一条)
+		var parts = new List<string>();
 		if (manyMsgs)
-			msgs.Add(new Message
-			{
-				role = "system",
-				content = "(对方刚才短时间内连续发了几条消息:请把它们当成一件事自然地回应,不要逐条机械回复,不要复述每条)",
-			});
+			parts.Add("(对方刚才短时间内连续发了几条消息:请把它们当成一件事自然地回应,不要逐条机械回复,不要复述每条)");
+		var scene = BuildSceneSnippet();
+		if (scene.Length > 0) parts.Add(scene);
+		var hints = TakePendingActionHints();
+		if (hints.Count > 0) parts.Add(BuildActionHintText(hints));
+		var sysHints = TakePendingSystemHints();
+		if (sysHints.Count > 0)
+			parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境,就用 switch_mood / switch_scene 切到合适的;否则忽略。");
+		if (parts.Count > 0)
+			msgs.Add(new Message { role = "system", content = string.Join("\n\n", parts) });
 		return msgs;
 	}
 
@@ -2523,8 +2556,7 @@ public class AuraCanAiCore : IDisposable
 		if (string.IsNullOrEmpty(_llmSetting.deepseekKey)) return;
 		lock (_historyLock) _pendingActionHints.Add((hint, DateTime.Now));
 		Log($"动作现场提示已记录(不入历史): {hint}");
-		var roleNow = GetLLMRole(GetActiveRoleName());
-		if (string.IsNullOrEmpty(roleNow.setting)) return; // 无人设:不回复(与普通消息一致)
+		if (!ShouldTriggerAi()) return; // 未启用状态机且无人设:不回复(与普通消息一致)
 		if (_lastSpeakChannel.Length > 0) NotifyChatTurnPending(_lastSpeakChannel, _lastSpeakAddr);
 	}
 

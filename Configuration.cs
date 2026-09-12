@@ -52,6 +52,7 @@ public class Configuration : IPluginConfiguration
 	public int SmCurrentMoodId { get; set; } // 当前第一层(角色状态)
 	public int SmCurrentSceneId { get; set; } // 当前第二层(情景)
 	public List<SmMood> SmMoods { get; set; } = new(); // 第一层列表(含各自的情景)
+	public bool DefaultRolesV2Added { get; set; } // 迁移标记:已把默认「皮下」人设并入现有角色列表(只做一次)
 
 	// 以下两个字段对应原 Triggernometry 持久化变量 "AuraCanAI" / "AuraCanAI_LLM"
 	[JsonProperty] public string? MessageSettingsJson { get; set; }
