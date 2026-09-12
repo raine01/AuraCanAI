@@ -2904,7 +2904,7 @@ public class AuraCanAiCore : IDisposable
 			if (local != null)
 			{
 				var localName = GetCleanName(local.Name.TextValue);
-				var list = new List<(string name, float dist, bool looking)>();
+				var list = new List<(string name, float dist, bool looking, string meta)>();
 				foreach (var o in _objectTable)
 				{
 					if (o.ObjectKind != ObjectKind.Pc) continue;
@@ -2916,14 +2916,23 @@ public class AuraCanAiCore : IDisposable
 					var dz = o.Position.Z - local.Position.Z;
 					var d = MathF.Sqrt(dx * dx + dz * dz);
 					if (d > 40f) continue;
-					list.Add((GetCleanName(raw), d, IsLookingAtMe(o.EntityId)));
+					// 种族/性别/在线状态直接带上,免得模型“看不见”还硬编(用户实测:零工具调用却回“哦看到了”)
+					var meta = "";
+					if (o is IPlayerCharacter pc0)
+					{
+						var race0 = GetRaceName(pc0.Customize.Length > 0 ? pc0.Customize[0] : (byte)0);
+						var gender0 = pc0.Customize.Length > 1 && pc0.Customize[1] == 1 ? "女" : "男";
+						var status0 = GetOnlineStatusName(pc0.OnlineStatus.RowId);
+						meta = race0 + gender0 + (string.IsNullOrEmpty(status0) ? "" : "," + status0);
+					}
+					list.Add((GetCleanName(raw), d, IsLookingAtMe(o.EntityId), meta));
 				}
 				list.Sort((a, b) => a.looking != b.looking ? (a.looking ? -1 : 1) : a.dist.CompareTo(b.dist));
 				if (list.Count > 0)
 				{
 					sb.Append("在场:");
-					foreach (var (n, d, lk) in list.Take(5))
-						sb.Append(' ').Append(n).Append('(').Append(d.ToString("F0")).Append("米").Append(lk ? ",正在看你" : "").Append(')');
+					foreach (var (n, d, lk, meta) in list.Take(5))
+						sb.Append(' ').Append(n).Append('(').Append(string.IsNullOrEmpty(meta) ? "" : meta + ",").Append(d.ToString("F0")).Append("米").Append(lk ? ",正在看你" : "").Append(')');
 					sb.Append("; ");
 				}
 				else sb.Append("身边没有其他人; ");
@@ -2933,7 +2942,7 @@ public class AuraCanAiCore : IDisposable
 			// 最近一次移动结果(25 秒内),供模型理解刚才动作的成败
 			if (_lastMoveResult != null && (DateTime.Now - _lastMoveResultAt).TotalSeconds <= 25)
 				sb.Append("(刚结束的移动:").Append(_lastMoveResult).Append(")");
-			sb.Append("要确认某人/自己距离用 lookup_player(不带名字=列在场玩家,含种族/性别/在线状态/在你哪边);想坐哪可 list_seats(可传 near=某人看其旁座位);移动/坐下用 rp_body_action(approach/follow/leave/face/sit/stop);想告辞/结束互动/退到一边时用 leave_scene(会走到人少的地方,60 秒没人说话自动退小队);对谁说话/回应谁时可用 face_player 转身看向对方(多人时尤其适用);坐某人旁边 = sit 且 target 填那个玩家名(自动找其最近空座)或按 list_seats 的距离挑 #id;对方让你坐 TA 的**左边/右边**时,先 list_seats(near=那人) 看每个座在 TA 面朝的哪一侧(左/右/前/后),再挑对应座位名/#id 坐。距离永远以当前情况为准——对方可能已走开,别以为还在原位。动作绝不写进台词。已列出的在场者不必重复 lookup_player(除非要看种族/职业等细节或确认是否还在);没变化就别反复查。");
+			sb.Append("要确认某人/自己距离用 lookup_player(不带名字=列在场玩家,含种族/性别/在线状态/在你哪边);想坐哪可 list_seats(可传 near=某人看其旁座位);移动/坐下用 rp_body_action(approach/follow/leave/face/sit/stop);想告辞/结束互动/退到一边时用 leave_scene(会走到人少的地方,60 秒没人说话自动退小队);对谁说话/回应谁时可用 face_player 转身看向对方(多人时尤其适用);坐某人旁边 = sit 且 target 填那个玩家名(自动找其最近空座)或按 list_seats 的距离挑 #id;对方让你坐 TA 的**左边/右边**时,先 list_seats(near=那人) 看每个座在 TA 面朝的哪一侧(左/右/前/后),再挑对应座位名/#id 坐。距离永远以当前情况为准——对方可能已走开,别以为还在原位。动作绝不写进台词。已列出的在场者不必重复 lookup_player(除非要看职业等细节或确认是否还在);没变化就别反复查。⚠️ 问起在场某人的种族/性别/样子/在不在/在哪,直接照上面在场名单(名字后面括号里就是)回答;名单里没有的人先用 lookup_player 查。**没有数据就不要凭空猜,也不要假装看(说“我瞅瞅”“哦看到了”然后编)——要么用名单,要么调工具,要么就实话说不认识/没看清。**");
 			// 状态机:当前状态/情景/人设/动作/可切换路径(开启时)
 			var stateDesc = State?.DescribeStateForAi() ?? "";
 			if (stateDesc.Length > 0) sb.Append('\n').Append(stateDesc);
