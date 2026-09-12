@@ -57,6 +57,7 @@ public class Configuration : IPluginConfiguration
 	public bool DefaultRolesV2Added { get; set; } // 迁移标记:已把默认「皮下」人设并入现有角色列表(只做一次)
 	public bool SubskinPersonaV2 { get; set; } // 迁移标记:已把「皮下」人设换成温柔御姐+死宅上班族版(只改仍是旧默认的那份)
 	public bool SubskinPersonaV3 { get; set; } // 迁移标记:已把「皮下」人设加上“少提问”等微调
+	public bool SubskinPersonaV4 { get; set; } // 迁移标记:已把「皮下」人设改成第一人称碎片自述(去人机味)
 
 	// 以下两个字段对应原 Triggernometry 持久化变量 "AuraCanAI" / "AuraCanAI_LLM"
 	[JsonProperty] public string? MessageSettingsJson { get; set; }

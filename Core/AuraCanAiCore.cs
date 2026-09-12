@@ -164,6 +164,19 @@ public class AuraCanAiCore : IDisposable
 			}
 			try { config.Save(pi); } catch { }
 		}
+		// 迁移:「皮下」人设改成第一人称碎片自述(去人机味);只改上一版默认
+		if (!_config.SubskinPersonaV4)
+		{
+			_config.SubskinPersonaV4 = true;
+			var sub4 = _llmSetting.roles.FirstOrDefault(r => r.name == "皮下");
+			var s4 = sub4?.setting ?? "";
+			if (sub4 != null && (s4.Contains("普通上班族、国服 FF14 老玩家") || s4.Contains("## 你是谁")))
+			{
+				sub4.setting = Defaults.DefaultRoleSettingSubskin;
+				_config.SetLlmConfig(StripKey(_llmSetting));
+			}
+			try { config.Save(pi); } catch { }
+		}
 
 		Tts = new TtsService(config.TtsWorkers) { Enabled = config.TtsEnabled, Volume = config.TtsVolume, Rate = config.TtsRate };
 		State = new StateMachine(this, config); // 状态机(在 BehaviorEngine/ResetChatHistory 之前建,IsRolePlaying 依赖它)
