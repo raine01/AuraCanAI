@@ -58,7 +58,7 @@
 							<div class="d-flex align-items-center mb-2">
 								<button type="button" class="btn btn-sm btn-outline-success mr-2" id="smAddMoodBtn">+ 状态</button>
 								<button type="button" class="btn btn-sm btn-outline-success mr-2" id="smAddSceneBtn">+ 情景</button>
-								<span class="text-muted small">点节点选择；蓝=当前状态</span>
+								<span class="text-muted small">点节点选择；蓝=当前状态；虚线=可切换</span>
 							</div>
 							<div id="smEditor"></div>
 						</div>
@@ -639,13 +639,13 @@
 			var totalW = groups.reduce(function(a, g) { return a + g.w; }, 0) + groupGap * Math.max(0, groups.length - 1);
 			var x = Math.max(58, (W - totalW) / 2);
 			var moodY = 34, sceneY = 168;
-			var nodes = [], edges = [];
+			var nodes = [], edges = [], moodNodes = [];
 			groups.forEach(function(g) {
 				var m = g.m, scenes = m.scenes || [];
 				var cx = x + g.w / 2;
 				var mx = cx - moodW / 2, my = moodY;
 				var moodNode = { kind: 'mood', moodId: m.id, id: m.id, x: mx, y: my, w: moodW, h: moodH, label: m.name || '(未命名)', cur: sm.currentMoodId === m.id, sel: smSelKind === 'mood' && smSelMood === m.id };
-				nodes.push(moodNode);
+				nodes.push(moodNode); moodNodes.push(moodNode);
 				var n = Math.max(1, scenes.length);
 				var rowW = n * sceneW + (n - 1) * sceneGap;
 				var sx0 = cx - rowW / 2;
@@ -665,15 +665,22 @@
 				});
 				x += g.w + groupGap;
 			});
+			// 第一层之间由 AI 自由切换 → 用虚线把相邻状态节点连起来表示
+			for (var mi = 1; mi < moodNodes.length; mi++) {
+				var ma = moodNodes[mi - 1], mb = moodNodes[mi];
+				edges.push({ type: 'moodlink', x1: ma.x + ma.w, y1: ma.y + ma.h / 2, x2: mb.x, y2: mb.y + mb.h / 2 });
+			}
 			var parts = [];
 			// 分隔虚线 + 左侧行标(状态=第一层 / 情景=第二层)
 			var sepY = (moodY + moodH + sceneY) / 2;
 			parts.push('<line x1="0" y1="' + sepY + '" x2="' + W + '" y2="' + sepY + '" stroke="#c2cddb" stroke-width="1" stroke-dasharray="6 4"/>');
 			parts.push('<text x="8" y="' + (moodY + moodH / 2 + 4) + '" font-size="12" fill="#adb5bd">状态</text>');
 			parts.push('<text x="8" y="' + (sceneY + sceneH / 2 + 4) + '" font-size="12" fill="#adb5bd">情景</text>');
-			edges.forEach(function(e) {
+				edges.forEach(function(e) {
 				if (e.type === 'tree') {
 					parts.push('<line x1="' + e.x1 + '" y1="' + e.y1 + '" x2="' + e.x2 + '" y2="' + e.y2 + '" stroke="#c2cddb" stroke-width="1.5"/>');
+				} else if (e.type === 'moodlink') {
+					parts.push('<line x1="' + e.x1 + '" y1="' + e.y1 + '" x2="' + e.x2 + '" y2="' + e.y2 + '" stroke="#7aa7d8" stroke-width="1.5" stroke-dasharray="4 3"/>');
 				} else {
 					var by = Math.max(e.y1, e.y2) + 22;
 					parts.push('<path d="M ' + e.x1 + ' ' + e.y1 + ' C ' + e.x1 + ' ' + by + ', ' + e.x2 + ' ' + by + ', ' + e.x2 + ' ' + e.y2 + '" fill="none" stroke="#7aa7d8" stroke-width="1.5" stroke-dasharray="4 3"/>');

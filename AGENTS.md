@@ -569,3 +569,7 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
   - `SendMsg` / `NotifyActionHint` 都改用 ShouldTriggerAi;`BuildRequestMessages`(无人设纯文字路径)也补上了场景+状态+事件提示注入(以前只有攒条提醒)。
   - ⚠️ 纯文字分支**不带工具**(switch_mood/switch_scene/rp_idle_action 都不可用),所以空人设情景无法自主切状态——这是按“不演角色”口径的取舍;要切状态就给人设。
 - **节点图**:第一层/第二层之间加**横向虚线分隔**,左边缘标「状态」「情景」;节点布局左侧留 58px 给标签。默认示例不再是三角形(现在是两组节点)。
+
+## 节点图:第一层虚线(2026-09-12)
+- 第一层之间 AI 可自由切换 → 用**虚线**把相邻「状态」节点连起来(与情景间路径同一视觉语义:虚线=可切换)。
+- `smDrawGraph` 里收集 `moodNodes`,相邻两个之间 push `type:'moodlink'` 边,渲染成 `#7aa7d8` 虚线直线(y=状态行中线)。
