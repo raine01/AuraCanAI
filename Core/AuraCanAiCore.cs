@@ -1512,7 +1512,7 @@ public class AuraCanAiCore : IDisposable
 		// ② 首次使用 → 默认示例
 		if (_config.SmSets.Count == 0)
 		{
-			_config.SmSets.Add(new SmSet { id = 1, name = "默认", moods = Defaults.DefaultStateMachine() });
+			_config.SmSets.Add(new SmSet { id = 1, name = "白屿涟音", moods = Defaults.DefaultStateMachine() });
 			_config.SmCurrentSetId = 1;
 			changed = true;
 		}
@@ -1520,6 +1520,12 @@ public class AuraCanAiCore : IDisposable
 		else if (_config.SmSets.Count == 1 && IsLegacyDefaultMoods(_config.SmSets[0].moods))
 		{
 			_config.SmSets[0].moods = Defaults.DefaultStateMachine();
+			changed = true;
+		}
+		// ③.5 旧示例套名「默认」→「白屿涟音」
+		if (_config.SmSets.Count == 1 && _config.SmSets[0].name == "默认")
+		{
+			_config.SmSets[0].name = "白屿涟音";
 			changed = true;
 		}
 		// ④ 当前状态机有效
@@ -3253,7 +3259,7 @@ public class AuraCanAiCore : IDisposable
 					foreach (var s in m.scenes) s.nextSceneIds.RemoveAll(id => m.scenes.All(x => x.id != id));
 				}
 			}
-			if (sets.Count == 0) sets.Add(new SmSet { id = 1, name = "默认", moods = new List<SmMood>() });
+			if (sets.Count == 0) sets.Add(new SmSet { id = 1, name = "白屿涟音", moods = new List<SmMood>() });
 			_config.SmSets = sets;
 			if (parsed["enabled"] != null) _config.StateMachineEnabled = parsed["enabled"]!.Value<bool>();
 			if (parsed["currentSetId"] != null && _config.SmSets.Any(s => s.id == parsed["currentSetId"]!.Value<int>()))

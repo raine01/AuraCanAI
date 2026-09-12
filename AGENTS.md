@@ -589,3 +589,8 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - HTTP:`GetStateMachine` 返回 `sets/currentSetId/...`;`SaveStateMachine` body = `{enabled,currentSetId,sets[]}`(对每套做与以前同样的清洗:无名剔除、id 去重、nextSceneIds 过滤);新增 `SetCurrentStateMachine {id}`(切当前套并重置 idle+上下文)。`ArmIdlePos`/`ClearIdlePos` 都要带 `setId`。
 - 前端:新增顶部**状态机页签** `#smSetBar`(按钮 + ✎重命名 + ✕删除 + 新建,样式同场景设定房子页签);点页签 = 选中并切为当前套(`/SetCurrentStateMachine`)。节点图/编辑面板都基于 `smActiveSet()`。保存带 `currentSetId: smSelSet`。删除时至少保留一套。
 - 运行时只使用「当前套」;跨套切换目前**只能手动点页签**(AI 工具不涉及跨套)。
+
+## 两处小改(2026-09-12)
+- 示例/默认状态机套名:「默认」→「**白屿涟音**」(`EnsureStateMachineState` 播种 + `SaveStateMachineJson` 兜底;并把已存在的唯一「默认」套改名)。
+- 角色删除校验:`character.html` 删角色前先查 `smRoleInUse(角色名)`,若被任何状态机情景引用则拒绝并提示(列出处);角色**改名**时 `smRenameRoleRefs()` 同步状态机里的 roleName 引用并保存,避免绑定静默失效。
+- 跨套切换:用户明确「不希望从一个状态机切到另一个」→ 保持现状(仅前端页签手动切,无 AI 工具)。

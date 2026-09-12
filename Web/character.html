@@ -366,6 +366,11 @@
 			$('.delete-role-btn').click(function() {
 				const $roleItem = $(this).closest('.role-item');
 				const roleName = $roleItem.find('.role-name').val() || '未命名角色';
+				const used = smRoleInUse(roleName);
+				if (used.length > 0) {
+					showAlert('角色「' + roleName + '」正在被状态机使用（' + used.join('；') + '），不能删除。请先到上方「状态机」把用到它的情景换人设或留空。', 'danger');
+					return;
+				}
 				if (confirm('确定要删除角色 "' + roleName + '" 吗？')) {
 					allRoles = allRoles.filter(role => role.name !== roleName);
 					$roleItem.remove();
@@ -437,6 +442,8 @@
 				allRolesMap[roleName] = updatedRole;
 
 				if (originalName && originalName !== roleName) {
+					// 角色改名:同步状态机里对该人设的引用,避免绑定静默失效
+					if (smRenameRoleRefs(originalName, roleName)) smSave(true);
 					delete allRolesMap[originalName];
 				}
 
@@ -580,6 +587,34 @@
 			return html;
 		}
 
+		// 角色改名时同步状态机引用;有改动返回 true
+		function smRenameRoleRefs(oldName, newName) {
+			var changed = false;
+			(sm.sets || []).forEach(function(set) {
+				(set.moods || []).forEach(function(m) {
+					(m.scenes || []).forEach(function(s) {
+						if (s.roleName === oldName) { s.roleName = newName; changed = true; }
+					});
+				});
+			});
+			if (changed) { smRenderSetBar(); smRenderEditor(); }
+			return changed;
+		}
+
+		// 该角色是否正被某个状态机的情景使用(用于删除角色时的校验)
+		function smRoleInUse(roleName) {
+			var hits = [];
+			if (!roleName) return hits;
+			(sm.sets || []).forEach(function(set) {
+				(set.moods || []).forEach(function(m) {
+					(m.scenes || []).forEach(function(s) {
+						if (s.roleName === roleName) hits.push((set.name || '?') + ' / ' + (m.name || '?') + ' / ' + (s.name || '?'));
+					});
+				});
+			});
+			return hits;
+		}
+
 		function loadStateMachine() {
 			$.ajax({
 				url: '/GetStateMachine', type: 'POST',
@@ -673,7 +708,7 @@
 		}
 
 		function smAddSet() {
-			var name = prompt('新状态机名字（如：默认 / 白屿涟音 / 战斗）：');
+			var name = prompt('新状态机名字（如：白屿涟音 / 战斗 / 日常）：');
 			if (!name || !name.trim()) return;
 			var id = smNextId(sm.sets);
 			sm.sets.push({ id: id, name: name.trim(), moods: [] });
