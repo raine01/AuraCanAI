@@ -790,7 +790,6 @@
 				var id = 'smtool_' + s.id + '_' + t.name;
 				return '<div class="form-check form-check-inline mr-3"><input type="checkbox" class="form-check-input sm-tool" id="' + id + '" data-state="' + s.id + '" data-tool="' + t.name + '" ' + (on ? 'checked' : '') + '><label class="form-check-label small" for="' + id + '">' + escAttr(t.label) + '</label></div>';
 			}).join('');
-			var actionsHtml = (s.actions || []).map(function(a, i) { return smActionRow(set.id, s.id, a, i); }).join('');
 			return `
 			<div class="border rounded p-2">
 				<div class="row g-2 align-items-end mb-2">
@@ -809,35 +808,9 @@
 				</div>
 				<div class="mb-2"><span class="text-muted small mr-2">可切换到的状态（单向：从本状态能切到勾上的这些）：</span>${linkHtml}</div>
 				<div class="mb-2"><span class="text-muted small mr-2">工具集（该状态下 AI 能用哪些工具；默认全选）：</span>${toolHtml}</div>
-				<div class="sm-actions">${actionsHtml}</div>
-				<button type="button" class="btn btn-outline-primary btn-sm sm-add-action" data-state="${s.id}">+ 动作</button>
 			</div>`;
 		}
 
-		function smActionRow(setId, stateId, a, i) {
-			a = a || {};
-			var pos = a.hasPos ? ('(' + (+a.x || 0).toFixed(1) + ', ' + (+a.z || 0).toFixed(1) + ')') : '—';
-			return `
-			<div class="row g-2 align-items-center mb-1">
-				<div class="col-md-3">
-					<input type="text" class="form-control form-control-sm sm-act-name" data-state="${stateId}" data-idx="${i}" value="${escAttr(a.name || '')}" placeholder="名称">
-				</div>
-				<div class="col-md-2">
-					<input type="text" class="form-control form-control-sm sm-act-emote" data-state="${stateId}" data-idx="${i}" value="${escAttr(a.emote || '')}" placeholder="动作（表情名）">
-				</div>
-				<div class="col-md-2">
-					<input type="number" min="0" class="form-control form-control-sm sm-act-cd" data-state="${stateId}" data-idx="${i}" value="${a.cooldown || 0}" placeholder="冷却秒">
-				</div>
-				<div class="col-md-3 text-nowrap">
-					<span class="small text-muted mr-1">${pos}</span>
-					<button type="button" class="btn btn-sm btn-outline-info mr-1 sm-arm-pos" data-state="${stateId}" data-idx="${i}">记录位置</button>
-					<button type="button" class="btn btn-sm btn-outline-secondary sm-clear-pos" data-state="${stateId}" data-idx="${i}">清空</button>
-				</div>
-				<div class="col-md-2">
-					<button type="button" class="btn btn-outline-danger btn-sm w-100 sm-del-action" data-state="${stateId}" data-idx="${i}">删除</button>
-				</div>
-			</div>`;
-		}
 
 		function smApplyInput($el) {
 			var sid = +$el.data('state'), idx = $el.data('idx');
@@ -863,15 +836,6 @@
 					s6.tools = s6.tools || [];
 					var k6 = s6.tools.indexOf(t6);
 					if (on6) { if (k6 < 0) s6.tools.push(t6); } else if (k6 >= 0) s6.tools.splice(k6, 1);
-				}
-			}
-			else if ($el.hasClass('sm-act-name') || $el.hasClass('sm-act-emote') || $el.hasClass('sm-act-cd')) {
-				var s5 = smState(sid);
-				if (s5 && s5.actions && s5.actions[idx]) {
-					var a = s5.actions[idx];
-					if ($el.hasClass('sm-act-name')) a.name = $el.val();
-					else if ($el.hasClass('sm-act-emote')) a.emote = $el.val();
-					else a.cooldown = parseInt($el.val(), 10) || 0;
 				}
 			}
 		}
@@ -908,13 +872,13 @@
 				var name = prompt('新状态名（如：皮下 / 皮上 / 心情很糟糕）：');
 				if (!name || !name.trim()) return;
 				var id = smNextId(set.states);
-				set.states.push({ id: id, name: name.trim(), desc: '', roleName: '', actions: [], nextStateIds: [], tools: (sm.toolCatalog || []).map(function(t) { return t.name; }) });
+				set.states.push({ id: id, name: name.trim(), desc: '', roleName: '', nextStateIds: [], tools: (sm.toolCatalog || []).map(function(t) { return t.name; }) });
 				smSelState = id;
 				smRender(); smSave(true);
 			});
 
 			// 表单输入 → 写回 sm + 防抖保存(图上名字实时更新,不重渲输入框以保留焦点)
-			$('#smRoot').on('input', '.sm-state-name, .sm-state-desc, .sm-act-name, .sm-act-emote, .sm-act-cd', function() {
+			$('#smRoot').on('input', '.sm-state-name, .sm-state-desc', function() {
 				smApplyInput($(this)); smMarkEditing(); smDrawGraph(); smSave();
 			});
 			$('#smRoot').on('change', '.sm-state-role, .sm-link, .sm-tool', function() {
@@ -922,52 +886,15 @@
 			});
 
 			// 结构操作
-			$('#smRoot').on('click', '.sm-add-action', function() {
-				var sid = +$(this).data('state');
-				var s = smState(sid); if (!s) return;
-				s.actions = s.actions || [];
-				s.actions.push({ name: '', emote: '', cooldown: 30, hasPos: false, x: 0, y: 0, z: 0, yaw: 0, territoryId: 0 });
-				smRenderEditor(); smSave();
-			});
-			$('#smRoot').on('click', '.sm-del-action', function() {
-				var sid = +$(this).data('state'), idx = +$(this).data('idx');
-				var s = smState(sid); if (!s || !s.actions || !s.actions[idx]) return;
-				s.actions.splice(idx, 1); smRenderEditor(); smSave(true);
-			});
 			$('#smRoot').on('click', '.sm-del-state', function() {
 				var sid = +$(this).data('state');
 				var set = smActiveSet(); if (!set) return;
 				var s = smState(sid); if (!s) return;
-				if (!confirm('删除状态「' + s.name + '」及其动作？')) return;
+				if (!confirm('删除状态「' + s.name + '」？')) return;
 				set.states = set.states.filter(function(x) { return x.id !== sid; });
 				(set.states || []).forEach(function(x) { x.nextStateIds = (x.nextStateIds || []).filter(function(id) { return id !== sid; }); });
 				smSelState = set.states[0] ? set.states[0].id : 0;
 				smRender(); smSave(true);
-			});
-
-			// 位置
-			$('#smRoot').on('click', '.sm-arm-pos', function() {
-				var sid = +$(this).data('state'), idx = +$(this).data('idx');
-				var s = smState(sid); if (!s || !s.actions || !s.actions[idx]) return;
-				var a = s.actions[idx];
-				if (!a.name || !a.name.trim()) { showAlert('先给这个动作填「名称」再记录位置', 'warning'); return; }
-				smSave(true); // 确保动作已入库,/aca pos 才能找到
-				$.ajax({
-					url: '/ArmIdlePos', type: 'POST', contentType: 'application/json',
-					data: JSON.stringify({ setId: smSelSet, stateId: sid, name: a.name.trim() }),
-					success: function(r) { showAlert(r.message || '已准备记录位置', r.armed ? 'success' : 'warning'); },
-					error: function(x, s2, e) { showAlert('记录位置失败: ' + e, 'danger'); }
-				});
-			});
-			$('#smRoot').on('click', '.sm-clear-pos', function() {
-				var sid = +$(this).data('state'), idx = +$(this).data('idx');
-				var s = smState(sid); if (!s || !s.actions || !s.actions[idx]) return;
-				var a = s.actions[idx];
-				if (!confirm('清空「' + (a.name || '') + '」的位置？')) return;
-				a.hasPos = false; a.x = a.y = a.z = a.yaw = 0; a.territoryId = 0;
-				smRenderEditor();
-				smSave(true);
-				$.ajax({ url: '/ClearIdlePos', type: 'POST', contentType: 'application/json', data: JSON.stringify({ setId: smSelSet, stateId: sid, name: a.name || '' }) });
 			});
 		}
 

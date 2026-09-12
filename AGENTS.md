@@ -756,3 +756,14 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - **保留**:每状态的待机动作列表、**按冷却自动轮换**(`StateMachine.Tick`)、位置记录 `/aca pos`(自动轮换走位用)。
 - 提示词里“本状态动作”那行去掉“也可用 rp_idle_action 指定”;help 页同步。
 - 工具集现在 7 项:rp_body_action / face_player / lookup_player / list_seats / rp_emote / party_action / leave_scene。
+
+## 删除待机动作整体(2026-09-12,用户口径:保留的那些也删掉)
+- 删:`IdleAction` 类、`SmState.actions`、`SmScene.actions`(旧类)；
+  `StateMachine` 的待机轮换(`Tick`/`StartAction`/`PlayEmote`/`PickRandom`/`IntervalFor`/`ResetIdle`)与
+  位置记录(`ArmPos`/`ClearArm`/`RecordPosition`/`ClearPosition`/`Armed*`);
+  `AuraCanAiCore.GetLocalTransform()`、`ArmIdlePosJson`/`ClearIdlePosJson` 与 HttpServer 注册；
+  500ms tick 里的 `State?.Tick()`;命令 `/aca pos`;`GetStateMachineJson` 的 `armed` 字段。
+- 前端:状态编辑面板去掉动作列表(名称/动作/冷却/位置)与 `smActionRow`/`.sm-act-*`/`.sm-add-action`/`.sm-del-action`/
+  `.sm-arm-pos`/`.sm-clear-pos` 与 `ArmIdlePos`/`ClearIdlePos` 调用;新建状态不再带 `actions`。
+- 现在状态 = 名称 + 说明 + 人设 + 单向通路 + 工具集。工具集 7 项(switch_state 自动)。
+- 配置里的旧 `actions` 字段会被 Newtonsoft 忽略(下次保存自然消失)。

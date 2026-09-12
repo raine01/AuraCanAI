@@ -95,14 +95,13 @@ public class SmSet
 }
 
 /// <summary>角色状态(单层状态机的一个节点)。
-/// roleName = 该状态用的人设;actions = 待机动作;nextStateIds = 允许切换到的状态(勾选的才能互通;空 = 不能切到别的状态)。</summary>
+/// roleName = 该状态用的人设;nextStateIds = 允许切换到的状态(单向;空 = 不能切到别的状态);tools = 可用工具集。</summary>
 public class SmState
 {
 	public int id { get; set; }
 	public string name { get; set; } = ""; // 显示名(皮下 / 皮上 / 心情很糟糕 …)
 	public string desc { get; set; } = ""; // 给 AI 的说明:什么时候该处于这个状态
 	public string roleName { get; set; } = ""; // 该状态使用的人设(角色设定里的角色名;空 = 不演角色,照常聊天)
-	public List<IdleAction> actions { get; set; } = new(); // 待机动作列表(名称/动作/冷却/位置)
 	public List<int> nextStateIds { get; set; } = new(); // 允许切换到的状态(**单向**:只列出从这里能切过去的状态)
 	public List<string> tools { get; set; } = new(); // 该状态下 AI 可用的工具名(空 = 全开);见 AiToolCatalog
 }
@@ -134,20 +133,6 @@ public static class AiToolCatalog
 	public static List<string> AllNames() => All.Select(x => x.Name).ToList();
 }
 
-/// <summary>待机动作(每个状态一份):名称 / 动作(游戏表情名) / 冷却(秒,也是自动轮换间隔) / 位置(可空)。
-/// 与 RoleAction 的区别:没有「文字」项,多一个「位置」项(可在游戏内用 /aca pos 导入)。</summary>
-public class IdleAction
-{
-	public string name { get; set; } = ""; // 名称(AI 引用标识 + 冷却/轮换键)
-	public string emote { get; set; } = ""; // 动作:游戏表情名(如 坐下;可空=只走到位置站着)
-	public int cooldown { get; set; } = 0; // 冷却(秒)= 该动作停留多久后自动随机换下一个(0 按 30 秒)
-	public bool hasPos { get; set; } = false; // 是否设置了位置
-	public float x { get; set; }
-	public float y { get; set; }
-	public float z { get; set; }
-	public float yaw { get; set; } // 面向(弧度,0=南)
-	public uint territoryId { get; set; } // 记录位置时所在地区(跨屋防错位)
-}
 
 // ===== 旧版两层模型(仅用于启动迁移;新代码不再使用) =====
 
@@ -167,7 +152,6 @@ public class SmScene
 	public string name { get; set; } = "";
 	public string desc { get; set; } = "";
 	public string roleName { get; set; } = "";
-	public List<IdleAction> actions { get; set; } = new();
 	public List<int> nextSceneIds { get; set; } = new();
 }
 

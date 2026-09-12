@@ -41,7 +41,7 @@ public class AuraCanAiCore : IDisposable
 	public BehaviorEngine Behaviors { get; private set; } = null!; // 行为设置引擎(宏触发自动化)
 	public PlaylistPlayer Playlist { get; private set; } = null!; // 歌单播放引擎(MIDI 播放)
 	public RoleActionPlayer RoleActions { get; private set; } = null!; // 角色自定义动作执行器(AI 主动执行动作)
-	public StateMachine State { get; private set; } = null!; // 两层状态机(第一层角色状态 / 第二层情景 + 待机动作轮换)
+	public StateMachine State { get; private set; } = null!; // 单层状态机(状态 + 人设 + 工具集 + 单向通路)
 	public MovementController Movement { get; private set; } = null!; // 移动控制器(自动走近/跟随/走开/到点,Phase 1)
 	private readonly MovementOverride _movementOverride; // 移动输入 hook(底层;与 Movement 同生命周期)
 
@@ -190,7 +190,7 @@ public class AuraCanAiCore : IDisposable
 		_clientState.Login += OnLogin;
 
 		// 定时器:500ms 注视检测 + 玩家进出 + 行为求值,2000ms 入场播报(回调切回游戏主线程访问 ObjectTable)
-		_timer500 = new Timer(_ => _framework.RunOnFrameworkThread(() => SafeTick(() => { CheckLookingAndPlayers(); Behaviors?.Tick(); RoleActions?.Tick(); State?.Tick(); CheckPartyStateTick(); CheckLeavePartyTick(); ReplyTick(); })), null, 0, 500);
+		_timer500 = new Timer(_ => _framework.RunOnFrameworkThread(() => SafeTick(() => { CheckLookingAndPlayers(); Behaviors?.Tick(); RoleActions?.Tick(); CheckPartyStateTick(); CheckLeavePartyTick(); ReplyTick(); })), null, 0, 500);
 		_timer2000 = new Timer(_ => _framework.RunOnFrameworkThread(() => SafeTick(CheckNewPlayers)), null, 2000, 2000);
 
 		// 行为设置引擎:从配置编译规则(UI 增删改后重新 Reload)
@@ -1698,8 +1698,6 @@ public class AuraCanAiCore : IDisposable
 				? string.Join("; ", m.scenes.Select(s => s.desc).Where(d => !string.IsNullOrWhiteSpace(d)))
 				: m.desc,
 			roleName = m.scenes.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.roleName))?.roleName ?? "",
-			actions = m.scenes.SelectMany(s => s.actions ?? new List<IdleAction>())
-				.GroupBy(a => string.IsNullOrWhiteSpace(a.name) ? a.emote : a.name).Select(g => g.First()).ToList(),
 			tools = AiToolCatalog.AllNames(),
 		}).ToList();
 		var ids = states.Select(s => s.id).ToList();
@@ -1712,20 +1710,6 @@ public class AuraCanAiCore : IDisposable
 
 	/// <summary>保存插件配置(供 StateMachine 等内部组件调用)。</summary>
 	public void SaveConfig() { try { _config.Save(_pi); } catch { } }
-
-	/// <summary>本地玩家坐标/面向/地区(状态机记录「位置」用);未登录返回 null。自动切框架线程。</summary>
-	public (System.Numerics.Vector3 pos, float yaw, uint tid)? GetLocalTransform()
-	{
-		if (_framework.IsInFrameworkUpdateThread) return GetLocalTransformCore();
-		return _framework.RunOnFrameworkThread(GetLocalTransformCore).GetAwaiter().GetResult();
-	}
-
-	private (System.Numerics.Vector3 pos, float yaw, uint tid)? GetLocalTransformCore()
-	{
-		var local = _objectTable.LocalPlayer;
-		if (local == null) return null;
-		return (local.Position, local.Rotation, _clientState.TerritoryType);
-	}
 
 	/// <summary>本地玩家是否坐着:true/false;判定不可用(CS 签名失败)返回 null。
 	/// 用 EmoteController.GetPosture()(SittingInChair / SittingOnGround / Dozing)——FF14 没有简单的“坐着”旗标,
@@ -3477,7 +3461,6 @@ public class AuraCanAiCore : IDisposable
 		_config.SmCurrentSetId = 1;
 		_config.SmCurrentStateId = _config.SmSets[0].states[0].id;
 		SaveConfig();
-		State.ResetIdle();
 		ResetChatHistory();
 		Log("[状态机] 已重置为默认示例(单套「白屿涟音」)");
 		return "状态机已重置为默认示例:单套「白屿涟音」(皮下/皮上)";
@@ -3496,7 +3479,6 @@ public class AuraCanAiCore : IDisposable
 			sets = _config.SmSets,
 			roles = _llmSetting.roles.Select(r => r.name).ToList(),
 			toolCatalog = AiToolCatalog.All.Select(x => new { name = x.Name, label = x.Label }).ToList(),
-			armed = new { setId = State.ArmedSetId, stateId = State.ArmedStateId, name = State.ArmedActionName },
 			currentRole = GetActiveRoleName(),
 			result = "success",
 		};
@@ -3521,8 +3503,6 @@ public class AuraCanAiCore : IDisposable
 				foreach (var st in set.states)
 				{
 					if (st.id <= 0 || !seen.Add(st.id)) st.id = NextFreeId(seen);
-					if (st.actions == null) st.actions = new List<IdleAction>();
-					st.actions.RemoveAll(a => a == null || (string.IsNullOrWhiteSpace(a.name) && string.IsNullOrWhiteSpace(a.emote)));
 					if (st.nextStateIds == null) st.nextStateIds = new List<int>();
 					if (st.tools == null) st.tools = AiToolCatalog.AllNames();
 					else st.tools = st.tools.Where(n => AiToolCatalog.AllNames().Contains(n)).Distinct().ToList();
@@ -3543,8 +3523,7 @@ public class AuraCanAiCore : IDisposable
 			var st2 = set2.states.FirstOrDefault(m => m.id == _config.SmCurrentStateId) ?? set2.states.FirstOrDefault();
 			_config.SmCurrentStateId = st2?.id ?? 0;
 			SaveConfig();
-			State.ResetIdle();
-			ResetChatHistory();
+				ResetChatHistory();
 			Log($"[状态机] 已保存:{_config.SmSets.Count} 套;当前「{set2.name}」 {State.CurrentStateName}");
 			return new { message = "状态机已保存", result = "success" };
 		}
@@ -3571,8 +3550,7 @@ public class AuraCanAiCore : IDisposable
 				var set = _config.SmSets.First(s => s.id == id);
 				_config.SmCurrentStateId = set.states.FirstOrDefault()?.id ?? 0;
 				SaveConfig();
-				State.ResetIdle();
-				ResetChatHistory();
+						ResetChatHistory();
 				Log($"[状态机] 当前状态机 → 「{set.name}」({State.CurrentStateName})");
 			}
 			return new { currentSetId = _config.SmCurrentSetId, currentStateId = _config.SmCurrentStateId, currentRole = GetActiveRoleName(), result = "success" };
@@ -3588,8 +3566,7 @@ public class AuraCanAiCore : IDisposable
 			var en = JObject.Parse(json)["enabled"]?.Value<bool>() ?? false;
 			_config.StateMachineEnabled = en;
 			SaveConfig();
-			State.ResetIdle();
-			ResetChatHistory();
+				ResetChatHistory();
 			var active = GetActiveRoleName();
 			Log($"[状态机] 已{(en ? "开启" : "关闭")};当前生效角色={(string.IsNullOrEmpty(active) ? "(空,纯聊天)" : active)}");
 			return new { enabled = en, activeRole = active, result = "success" };
@@ -3611,31 +3588,6 @@ public class AuraCanAiCore : IDisposable
 		catch (Exception e) { return new { message = e.Message, result = "error" }; }
 	}
 
-	/// <summary>武装「记录位置」:前端某动作行点「记录位置」后,游戏内 /aca pos(不带名)写进这条。</summary>
-	public object ArmIdlePosJson(string json)
-	{
-		try
-		{
-			var p = JObject.Parse(json);
-			State.ArmPos(p["setId"]?.Value<int>() ?? 0, p["stateId"]?.Value<int>() ?? 0, p["name"]?.ToString() ?? "");
-			var armed = State.ArmedActionName.Length > 0;
-			return new { armed, name = State.ArmedActionName, message = armed ? "已准备记录位置:请到游戏里站好,输入 /aca pos" : "已取消记录位置", result = "success" };
-		}
-		catch (Exception e) { return new { message = e.Message, result = "error" }; }
-	}
-
-	/// <summary>清空某动作的位置(前端「清空位置」)。</summary>
-	public object ClearIdlePosJson(string json)
-	{
-		try
-		{
-			var p = JObject.Parse(json);
-			var msg = State.ClearPosition(p["setId"]?.Value<int>() ?? 0, p["stateId"]?.Value<int>() ?? 0, p["name"]?.ToString() ?? "");
-			return new { message = msg, result = "success" };
-		}
-		catch (Exception e) { return new { message = e.Message, result = "error" }; }
-	}
-
 	/// <summary>还原:默认角色设定 + 默认状态机(前端「还原默认角色设定与状态机」按钮)。DeepSeek Key 保留;
 	/// 「启用状态机」开关不动。</summary>
 	public object ResetRolesAndStateMachineJson(string _)
@@ -3648,7 +3600,6 @@ public class AuraCanAiCore : IDisposable
 		_config.SmCurrentStateId = _config.SmSets[0].states[0].id;
 		_config.Save(_pi);
 		RoleActions?.Reset();
-		State?.ResetIdle();
 		ResetChatHistory();
 		Log("[角色/状态机] 已还原为默认(角色设定 + 全部状态机)");
 		return new { message = "已还原默认角色设定与状态机(DeepSeek Key 保留)", result = "success" };
