@@ -50,7 +50,6 @@
 									<label class="custom-control-label" for="smEnabled">启用状态机</label>
 								</div>
 								<span class="badge badge-secondary mr-2" id="smCurrentBadge">—</span>
-								<button type="button" class="btn btn-sm btn-outline-secondary mr-2" id="smRefreshBtn">刷新</button>
 								<button type="button" class="btn btn-sm btn-success" id="smSaveBtn">保存</button>
 								<span class="small ml-2" id="smStatus"></span>
 							</div>
@@ -596,6 +595,15 @@
 			$.ajax({
 				url: '/GetStateMachine', type: 'POST',
 				success: function(r) {
+					// 别处(游戏内记录位置等)改了数据 → 未在编辑且无待保存改动时静默重载整个列表
+					if (JSON.stringify(r.moods || []) !== JSON.stringify(sm.moods || []) && !smEditing && !smSaveTimer) {
+						sm.moods = r.moods || []; sm.roles = r.roles || [];
+						sm.enabled = r.enabled; sm.currentMoodId = r.currentMoodId; sm.currentSceneId = r.currentSceneId;
+						sm.currentRole = r.currentRole; sm.armed = r.armed;
+						$('#smEnabled').prop('checked', !!r.enabled);
+						smRenderCurrent(); smDrawGraph(); smRenderEditor();
+						return;
+					}
 					sm.enabled = r.enabled; sm.currentMoodId = r.currentMoodId; sm.currentSceneId = r.currentSceneId;
 					sm.currentRole = r.currentRole; sm.armed = r.armed;
 					$('#smEnabled').prop('checked', !!r.enabled);
@@ -731,7 +739,6 @@
 						<input type="text" class="form-control form-control-sm sm-mood-desc" data-mood="${m.id}" value="${escAttr(m.desc || '')}" placeholder="给 AI 的说明（什么时候在这个状态）">
 					</div>
 					<div class="col-md-3 text-right">
-						<button type="button" class="btn btn-sm btn-outline-primary mr-1 sm-set-current-mood" data-mood="${m.id}">设为当前</button>
 						<button type="button" class="btn btn-sm btn-outline-danger sm-del-mood" data-mood="${m.id}">删除</button>
 					</div>
 				</div>
@@ -761,7 +768,6 @@
 						<input type="text" class="form-control form-control-sm sm-scene-desc" data-mood="${m.id}" data-scene="${s.id}" value="${escAttr(s.desc || '')}" placeholder="给 AI 的说明">
 					</div>
 					<div class="col-md-3 text-right">
-						<button type="button" class="btn btn-sm btn-outline-primary mr-1 sm-set-current-scene" data-mood="${m.id}" data-scene="${s.id}">设为当前</button>
 						<button type="button" class="btn btn-sm btn-outline-danger sm-del-scene" data-mood="${m.id}" data-scene="${s.id}">删除</button>
 					</div>
 				</div>
@@ -826,6 +832,7 @@
 		function smSave(immediate) {
 			clearTimeout(smSaveTimer);
 			var doSave = function() {
+				smSaveTimer = null;
 				$('#smStatus').removeClass('text-success text-danger').text('保存中…');
 				$.ajax({
 					url: '/SaveStateMachine', type: 'POST', contentType: 'application/json',
@@ -847,7 +854,6 @@
 				sm.enabled = $(this).is(':checked');
 				smSave(true); smRenderCurrent();
 			});
-			$('#smRefreshBtn').on('click', loadStateMachine);
 			$('#smSaveBtn').on('click', function() { smSave(true); });
 
 			$('#smAddMoodBtn').on('click', function() {
@@ -908,17 +914,6 @@
 				smRender(); smSave(true);
 			});
 
-			// 设为当前(调试/手动)
-			$('#smRoot').on('click', '.sm-set-current-mood', function() {
-				var m = smMood(+$(this).data('mood')); if (!m) return;
-				smSwitchCurrent({ mood: m.name }, '已切换到状态「' + m.name + '」');
-			});
-			$('#smRoot').on('click', '.sm-set-current-scene', function() {
-				var mid = +$(this).data('mood'), sid = +$(this).data('scene');
-				var m = smMood(mid), s = smScene(mid, sid); if (!m || !s) return;
-				smSwitchCurrent({ mood: m.name, scene: s.name }, '已切换到「' + m.name + ' / ' + s.name + '」');
-			});
-
 			// 位置
 			$('#smRoot').on('click', '.sm-arm-pos', function() {
 				var mid = +$(this).data('mood'), sid = +$(this).data('scene'), idx = +$(this).data('idx');
@@ -942,19 +937,6 @@
 				smRenderEditor();
 				smSave(true);
 				$.ajax({ url: '/ClearIdlePos', type: 'POST', contentType: 'application/json', data: JSON.stringify({ moodId: mid, sceneId: sid, name: a.name || '' }) });
-			});
-		}
-
-		function smSwitchCurrent(payload, okMsg) {
-			$.ajax({
-				url: '/SwitchStateMachine', type: 'POST', contentType: 'application/json',
-				data: JSON.stringify(payload),
-				success: function(r) {
-					if (r.result === 'error') { showAlert(r.message, 'danger'); return; }
-					showAlert(okMsg, 'success');
-					pollStateMachineCurrent();
-				},
-				error: function(x, s, e) { showAlert('切换失败: ' + e, 'danger'); }
 			});
 		}
 

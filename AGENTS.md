@@ -573,3 +573,9 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 ## 节点图:第一层虚线(2026-09-12)
 - 第一层之间 AI 可自由切换 → 用**虚线**把相邻「状态」节点连起来(与情景间路径同一视觉语义:虚线=可切换)。
 - `smDrawGraph` 里收集 `moodNodes`,相邻两个之间 push `type:'moodlink'` 边,渲染成 `#7aa7d8` 虚线直线(y=状态行中线)。
+
+## 状态机前端精简(2026-09-12 三次)
+- 移除「刷新」按钮。「设为当前」按钮(状态/情景)也移除——状态切换交给 AI。
+- 位置/数据变化的回显改为 **轮询静默重载**:`pollStateMachineCurrent` 里比较 `JSON.stringify(r.moods)` 与本地,不同且 `!smEditing && !smSaveTimer` 时整体重载并重渲编辑器(游戏内 `/aca pos` 后 2 秒内自动显示)。
+- `smSave` 的 doSave 里把 `smSaveTimer = null`(供上面的“无待保存”判断)。
+- 后端 `SwitchStateMachineJson` 接口保留(UI 不再调用,留给调试)。
