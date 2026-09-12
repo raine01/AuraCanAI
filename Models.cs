@@ -107,26 +107,24 @@ public class SmState
 }
 
 /// <summary>AI 可用工具目录(状态机里按状态勾选“这个状态下允许用哪些工具”;空 = 全开)。
-/// ⚠️ `switch_state` **不在这里**:它由“有没有可切换到的状态”自动决定(有通路就给、没通路就不给),不需要用户勾。</summary>
+/// ⚠️ `switch_identity` **不在这里**:它由“有没有可切换到的身份”自动决定(有就给、没就不给),不需要用户勾。</summary>
 public static class AiToolCatalog
 {
 	public const string BodyAction = "rp_body_action";
 	public const string FacePlayer = "face_player";
 	public const string LookupPlayer = "lookup_player";
-	public const string ListSeats = "list_seats";
 	public const string RoleEmote = "rp_emote";
-	public const string SwitchState = "switch_state";
-	public const string PartyAction = "party_action";
+	public const string SwitchIdentity = "switch_identity"; // 自动;不占工具集
+	public const string LeaveParty = "leave_party";
 	public const string LeaveScene = "leave_scene";
 
 	public static readonly (string Name, string Label)[] All =
 	{
-		(BodyAction, "身体动作（走近/跟随/走开/面向/停下/坐）"),
+		(BodyAction, "身体动作（走近/跟随/走开/停下/坐）"),
 		(FacePlayer, "转身看向某人"),
 		(LookupPlayer, "查看在场玩家（谁在场/谁在看你）"),
-		(ListSeats, "查看可坐座位"),
 		(RoleEmote, "做角色自定义动作"),
-		(PartyAction, "组队（邀请/接受/退队）"),
+		(LeaveParty, "主动退出小队"),
 		(LeaveScene, "离开场地（退到人少处）"),
 	};
 

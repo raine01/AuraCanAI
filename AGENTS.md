@@ -767,3 +767,17 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
   `.sm-arm-pos`/`.sm-clear-pos` 与 `ArmIdlePos`/`ClearIdlePos` 调用;新建状态不再带 `actions`。
 - 现在状态 = 名称 + 说明 + 人设 + 单向通路 + 工具集。工具集 7 项(switch_state 自动)。
 - 配置里的旧 `actions` 字段会被 Newtonsoft 忽略(下次保存自然消失)。
+
+## 提示词/工具精简(2026-09-12,用户过请求日志后的 6 条)
+1. **距离写法**:场景名单 `1米` → `距离1m`(避免误读成身高);`GetLookingDirection` → `右侧 1m`(不再是“米”)。
+2. **删掉「(队友的话用 /p 能听到)」**:回复频道由程序跟随来源频道,模型不选频道,这句话多余且可能诱导它写 /p。
+3. **`list_seats` 工具整体移除**(catalog/常量/build/`RunInfoToolCore` case/白名单/提示词):选座已由程序在 `sit(target=玩家名, side=…)` 内完成,
+   “旁边没空座”由 sit 的返回值告知,模型不需要也不该看座位清单。
+4. **不再暴露“状态机”概念**:注入段改为 `## 你现在的身份`,只讲人话(你现在是「皮下」…需要时可以换个身份…);
+   工具 **`switch_state` → `switch_identity`**(enum 参数名 `identity`);提示词/事件提醒/泄漏检测同步。前端 UI 文案可保留“状态机”。
+5. **`rp_body_action.face` 删除**:与 `face_player` 完全重复(都是 `TryLook`),而 `face_player` 走 info 循环更轻(不触发补台词轮)。
+   保留 `face_player`(本地命令 `/aca face` 仍用 `Movement.Face`)。
+6. **`party_action` → `leave_party`**(无参数,只“主动退队”):工具集目录 entry 改为 `leave_party`「主动退出小队」;
+   invite/accept 交给程序或命令(`/aca party invite|accept` 保留);`PartyAction(op,target)` 方法保留供命令用。
+   + 修了 `OutputFormatRule` 缺 `\n` 导致两条规则粘连的 bug。
+- 工具集现在 6 项:rp_body_action / face_player / lookup_player / rp_emote / leave_party / leave_scene。

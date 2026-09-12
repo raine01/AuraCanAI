@@ -2059,13 +2059,13 @@ public class AuraCanAiCore : IDisposable
 		if (hints.Count > 0) parts.Add(BuildActionHintText(hints));
 		var sysHints = TakePendingSystemHints();
 		if (sysHints.Count > 0)
-			parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境,就用 switch_state 切到合适的;否则忽略。");
+			parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境,就用 switch_identity 换到合适身份;否则忽略。");
 		if (parts.Count > 0)
 			msgs.Add(new Message { role = "system", content = string.Join("\n\n", parts) });
 		return msgs;
 	}
 
-	/// <summary>身体演出回复流程(可多轮工具循环):模型可并行/顺序查信息(lookup_player/list_seats),再决定台词/动作(rp_body_action)。
+	/// <summary>身体演出回复流程(可多轮工具循环):模型可并行/顺序查信息(lookup_player),再决定台词/动作(rp_body_action)。
 	/// 回复频道跟随最后一条触发消息来源频道(channelNo/replyAddress),见采集与身份链路契约。</summary>
 	private async Task ProcessBodyReplyAsync(Role role, string channelNo, string replyAddress, bool manyMsgs)
 	{
@@ -2083,7 +2083,7 @@ public class AuraCanAiCore : IDisposable
 			var actionCall = calls.FirstOrDefault(c => c.name == "rp_body_action");
 			bool hasAction = !string.IsNullOrEmpty(actionCall.name);
 			// 信息/轻动作工具(查询 或 纯转身看向):face_player 也走回填循环,让模型决定之后说/动什么
-			var infoCalls = calls.Where(c => c.name is "lookup_player" or "list_seats" or "face_player" or "rp_emote" or "leave_scene" or "switch_state" or "party_action").ToList();
+			var infoCalls = calls.Where(c => c.name is "lookup_player" or "face_player" or "rp_emote" or "leave_scene" or "switch_identity" or "leave_party").ToList();
 			if (hasAction && infoCalls.Count == 0)
 			{
 				// 纯动作轮:解析并执行
@@ -2139,9 +2139,9 @@ public class AuraCanAiCore : IDisposable
 					: RunInfoTool(c.name, c.args ?? "{}");
 				msgs.Add(new JObject { ["role"] = "tool", ["tool_call_id"] = c.id, ["content"] = ans });
 			}
-			// 状态切换(switch_state)可能换了人设 → 同步刷新本轮的 persona system,
+			// 换身份(switch_identity)可能换了人设 → 同步刷新本轮的 persona system,
 			// 否则本轮仍按旧人设回复(用户实测:要求「上皮」后仍以皮下口吻拒绝)
-			if (infoCalls.Any(c => c.name is "switch_state"))
+			if (infoCalls.Any(c => c.name is "switch_identity"))
 			{
 				var persona = BuildPersonaSystemMessage();
 				if (persona != null && msgs.Count > 0 && msgs[0]["role"]?.ToString() == "system")
@@ -2170,7 +2170,7 @@ public class AuraCanAiCore : IDisposable
 		var hints = TakePendingActionHints(); // 对方的动作/表情:只在本轮出现一次
 		if (hints.Count > 0) parts.Add(BuildActionHintText(hints));
 		var sysHints = TakePendingSystemHints(); // 加入/退出小队等事件:只在本轮出现一次
-		if (sysHints.Count > 0) parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境/心情,用 switch_state 切到合适的状态;否则忽略。");
+		if (sysHints.Count > 0) parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境,就用 switch_identity 换到合适身份;否则忽略。");
 		if (!string.IsNullOrWhiteSpace(extraInstruction)) parts.Add(extraInstruction);
 
 		if (parts.Count > 0)
@@ -2335,17 +2335,15 @@ public class AuraCanAiCore : IDisposable
 					try { actionName = (JObject.Parse(argsJson)["name"]?.ToString() ?? "").Trim(); } catch { }
 					return RoleActions.PerformByName(GetActiveRoleName(), actionName);
 				}
-				case "switch_state":
+				case "switch_identity":
 				{
-					var stateName = "";
-					try { stateName = (JObject.Parse(argsJson)["state"]?.ToString() ?? "").Trim(); } catch { }
-					return State.SwitchState(stateName).message;
+					var identityName = "";
+					try { identityName = (JObject.Parse(argsJson)["identity"]?.ToString() ?? "").Trim(); } catch { }
+					return State.SwitchState(identityName).message;
 				}
-				case "party_action":
+				case "leave_party":
 				{
-					var op = ""; var target = "";
-					try { var a = JObject.Parse(argsJson); op = (a["op"]?.ToString() ?? "").Trim(); target = (a["target"]?.ToString() ?? "").Trim(); } catch { }
-					return PartyAction(op, target);
+					return PartyAction("leave", "");
 				}
 				case "lookup_player":
 				{
@@ -2393,41 +2391,6 @@ public class AuraCanAiCore : IDisposable
 					}
 					return $"{name}{meta}{(look ? ",正在看你" : "")}。" + (d > 5 ? "(在房间另一侧/较远,别按很近处理)" : "");
 				}
-				case "list_seats":
-				{
-					var nearName = "";
-					try { nearName = (JObject.Parse(argsJson)["near"]?.ToString() ?? "").Trim(); } catch { }
-					// 参考中心:给了 near 玩家名 → 以该玩家为中心列距离;否则以自己为中心(不带名字就是本房间全部座位)
-					IGameObject? near = null;
-					if (nearName.Length > 0)
-					{
-						near = FindPlayerByName(nearName);
-						if (near == null) return $"list_seats:附近找不到玩家 {nearName}(可能已离开),换个名字或别传 near";
-					}
-					var house = EnsureSceneState();
-					var tid = _clientState.TerritoryType;
-					var seats = _config.Seats.Where(s => house != null && s.HouseId == house.Id && s.TerritoryId == tid).ToList();
-					if (seats.Count == 0) return "当前房间没有记录的可坐座位(先去 /aca seatadd)";
-					var sb = new System.Text.StringBuilder();
-					if (near != null)
-					{
-						// 按到该玩家的距离升序;同时给“相对该玩家朝向的方位”(左/右/前/后),方便挑“坐 TA 左边/右边”
-						sb.Append($"{nearName} 附近的座位(按距离;方位是相对 TA 的面朝方向):");
-						foreach (var s in seats.OrderBy(s => PlaneDist2D(near.Position, s)))
-						{
-							var dir = GetLookingDirection(new System.Numerics.Vector3(s.X, s.Y, s.Z), near.Position, near.Rotation); // 如 “右侧 1米”
-							sb.Append($" {s.Label()}(在{nearName}{dir},{(IsSeatOccupied(s) ? "有人" : "空")})");
-						}
-					}
-					else
-					{
-						sb.Append("当前房间可坐座位:");
-						foreach (var s in seats.OrderBy(s => s.Id))
-							sb.Append($" {s.Label()}{(IsSeatOccupied(s) ? "(有人)" : "(空)")}");
-					}
-					sb.Append("; 要坐某人旁边:传 near=那个人看每个座在 TA 的哪侧(左/右/前/后),再 sit 且 target 填对应座位名/#id;不指定侧时可直接 sit target=玩家名(自动找其最近空座)或 target 空=自己最近的空座。");
-					return sb.ToString();
-				}
 				default:
 					return "未知工具";
 			}
@@ -2439,7 +2402,7 @@ public class AuraCanAiCore : IDisposable
 		}
 	}
 
-	/// <summary>身体工具集:rp_body_action(动作)+ 按需信息查询(lookup_player/list_seats,模型视情况主动调,避免每轮全量塞入)</summary>
+	/// <summary>身体工具集:rp_body_action(动作)+ 按需信息查询(lookup_player 等,模型视情况主动调,避免每轮全量塞入)</summary>
 	private JArray BuildBodyActionTools(Role role)
 	{
 		JObject Func(string name, string desc, JObject props, string[] required)
@@ -2462,12 +2425,12 @@ public class AuraCanAiCore : IDisposable
 		}
 		var tools = new JArray
 		{
-			Func("rp_body_action", "让角色做身体动作(走近/跟随/走开/转身面向/停止移动/坐)。approach/follow/leave/face 只能对当前在场的玩家;先想清楚目标离你多远再决定动不动,拿不准用 lookup_player。sit:要坐到某人旁边就 target=玩家名;对方指定了左/右/前/后就用 side 参数(left/right/front/back/near)——**不要自己挑座位编号**,程序会自动找合适的空座并把“坐到了哪”告诉你。⚠️ 对方说“让一让/挪一挪/别挡着/借过/站边上点”→ 用 leave(target=对方) 或 leave_scene(退到人少的地方),**不要用 stop**:stop 只是终止正在进行的移动,它不会让你真的让开。动作绝不写进台词,也不要说出座位编号或工具/参数。",
+			Func("rp_body_action", "让角色做身体动作(走近/跟随/走开/停止移动/坐)。approach/follow/leave 只能对当前在场的玩家;先想清楚目标离你多远再决定动不动,拿不准用 lookup_player。sit:要坐到某人旁边就 target=玩家名;对方指定了左/右/前/后就用 side 参数(left/right/front/back/near)——**不要自己挑座位**，程序会自动找合适的空座并把“坐到了哪”告诉你。⚠️ 对方说“让一让/挪一挪/别挡着/借过/站边上点”→ 用 leave(target=对方) 或 leave_scene(退到人少的地方),**不要用 stop**:stop 只是终止移动,不会让你真的让开。动作绝不写进台词。",
 				new JObject
 				{
-					["action"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "approach", "follow", "leave", "face", "stop", "sit" } },
-					["target"] = new JObject { ["type"] = "string", ["description"] = "approach/follow/leave/face 填玩家名(空=最近接触的人);sit 填玩家名(坐 TA 旁边,可配 side)或座位名(一般不必),空=自己最近的空座" },
-					["side"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "left", "right", "front", "back", "near" }, ["description"] = "可选,仅 sit 且 target 是玩家时:坐 TA 的哪一侧(left/right/front/back/near=旁边)。不要自己挑 #编号,交给程序。" },
+					["action"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "approach", "follow", "leave", "stop", "sit" } },
+					["target"] = new JObject { ["type"] = "string", ["description"] = "approach/follow/leave 填玩家名(空=最近接触的人);sit 填玩家名(坐 TA 旁边,可配 side),空=自己最近的空座" },
+					["side"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "left", "right", "front", "back", "near" }, ["description"] = "可选,仅 sit 且 target 是玩家时:坐 TA 的哪一侧(left/right/front/back/near=旁边)。交给程序挑座。" },
 				}, new[] { "action" }),
 			Func("face_player", "让角色转身看向(面向)某个在场的玩家——多人对话时,你要对谁说话、回应谁,就先 face 他;也可用于表达正在注意/看着某人。动作绝不会移动。",
 				new JObject
@@ -2478,11 +2441,6 @@ public class AuraCanAiCore : IDisposable
 				new JObject
 				{
 					["name"] = new JObject { ["type"] = "string", ["description"] = "可选:玩家名;不填=列出所有在场玩家" },
-				}, Array.Empty<string>()),
-			Func("list_seats", "列出当前房间可坐的座位(是否空;传 near=某玩家时,会按距离列出并标出每个座在那个玩家面朝方向的哪一侧:左/右/前/后)。要坐下但不知道哪里有座位,或要坐在某人左边/右边时调用",
-				new JObject
-				{
-					["near"] = new JObject { ["type"] = "string", ["description"] = "可选:想坐在哪个玩家旁边,就填其名字;不填则列全部" },
 				}, Array.Empty<string>()),
 			Func("leave_scene", "离开(退场):结束这段互动、告辞、不想再被围观时用。会走到人少的地方(有空着的椅子就坐下),之后若 60 秒没人说话会自动退出小队。调用后你可以再说一句告别的话。",
 				new JObject(), Array.Empty<string>()),
@@ -2509,26 +2467,22 @@ public class AuraCanAiCore : IDisposable
 				}, new[] { "name" }));
 		}
 
-		// 状态机工具(开启时):切状态(只有存在通路时才给)
+		// 身份切换(开启状态机且存在可切换身份时才给)
 		if (_config.StateMachineEnabled && State != null)
 		{
 			var allowed = State.AllowedStates();
 			if (State.CurrentState != null && allowed.Count > 0)
 			{
-				tools.Add(Func("switch_state",
-					"切换你的角色状态/身份(如 皮下/皮上/心情…)。处境/身份/心情变了就用它;别人要求你上皮/出戏时不要拒绝,直接切。**只能切到列出的这几个**(没通路就切不过去)。如有人正在和你互动,优先切到“角色扮演/对话”类的状态。可用: " + string.Join(" / ", allowed.Select(s => s.name)),
-					new JObject { ["state"] = new JObject { ["type"] = "string", ["enum"] = new JArray(allowed.Select(s => JToken.FromObject(s.name)).ToArray()) } }, new[] { "state" }));
+				tools.Add(Func(AiToolCatalog.SwitchIdentity,
+					"换一个身份。当对方要你进入角色（上皮）、或要你出戏（皮下）、或你自己的心思/处境变了的时候用。只能换成下面列出的这几个。可选身份: " + string.Join(" / ", allowed.Select(s => s.name)),
+					new JObject { ["identity"] = new JObject { ["type"] = "string", ["enum"] = new JArray(allowed.Select(s => JToken.FromObject(s.name)).ToArray()) } }, new[] { "identity" }));
 			}
 		}
 
-		// 组队:邀请/接受/退队
-		tools.Add(Func("party_action",
-			"组队操作:invite(邀请某人加入你的小队,target=玩家名;对方需在当前场景)、accept(接受别人刚发来的组队邀请)、leave(退出当前小队)。想和别人一起行动时用。",
-			new JObject
-			{
-				["op"] = new JObject { ["type"] = "string", ["enum"] = new JArray { "invite", "accept", "leave" } },
-				["target"] = new JObject { ["type"] = "string", ["description"] = "invite 时填要邀请的玩家名;accept/leave 可空" },
-			}, new[] { "op" }));
+		// 主动离开小队(只保留这一个作用;邀请/接受由程序或命令处理)
+		tools.Add(Func(AiToolCatalog.LeaveParty,
+			"主动退出当前小队(不想跟着队伍了、想一个人待着时用)。不需要参数。",
+			new JObject(), Array.Empty<string>()));
 		// 按当前状态勾选的工具集过滤(状态机开启时;该状态 tools 为空 = 全开)
 		for (var i = tools.Count - 1; i >= 0; i--)
 		{
@@ -2542,7 +2496,7 @@ public class AuraCanAiCore : IDisposable
 	/// (空列表 = 用户把工具全关了这个状态就是不用工具;工具集在网页「状态机 → 状态编辑 → 工具集」勾选)</summary>
 	private bool ToolEnabled(string toolName)
 	{
-		if (toolName == AiToolCatalog.SwitchState) return true; // switch_state 不在工具集里,由“有无通路”自动决定
+		if (toolName == AiToolCatalog.SwitchIdentity) return true; // 换身份不在工具集里,由“有无可切换身份”自动决定
 		if (!_config.StateMachineEnabled || State == null) return true;
 		var t = State.CurrentState?.tools;
 		return t == null || t.Contains(toolName);
@@ -2551,7 +2505,7 @@ public class AuraCanAiCore : IDisposable
 	/// <summary>执行身体动作(框架线程调度),返回中文结果描述(供补台词请求引用);动作未知返回 null(不补台词)。</summary>
 	private string? ExecuteBodyAction(string action, string target, string side = "")
 	{
-		if (action is not ("approach" or "follow" or "leave" or "face" or "stop" or "sit")) return null;
+		if (action is not ("approach" or "follow" or "leave" or "stop" or "sit")) return null;
 		if (_framework.IsInFrameworkUpdateThread) return ExecuteBodyActionCore(action, target, side);
 		return _framework.RunOnFrameworkThread(() => ExecuteBodyActionCore(action, target, side)).GetAwaiter().GetResult();
 	}
@@ -2567,8 +2521,6 @@ public class AuraCanAiCore : IDisposable
 				case "stop":
 					if (m.IsActive) { m.Stop(); return "停止了移动"; }
 					return "本来就没有在移动";
-				case "face":
-					return m.Face(target) ? $"转身面向了 {who}" : $"面向失败(找不到 {target})";
 				case "sit":
 				{
 					var sitMsg = m.SitOnSeat(target, side);
@@ -2649,8 +2601,8 @@ public class AuraCanAiCore : IDisposable
 		|| text.Contains("<invoke", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("<parameter", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("rp_body_action", StringComparison.OrdinalIgnoreCase)
-		|| text.Contains("switch_state", StringComparison.OrdinalIgnoreCase)
-		|| text.Contains("party_action", StringComparison.OrdinalIgnoreCase)
+		|| text.Contains("switch_identity", StringComparison.OrdinalIgnoreCase)
+		|| text.Contains("leave_party", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("tool_calls", StringComparison.OrdinalIgnoreCase);
 
 	/// <summary>是否含可尝试恢复的 XML 工具块(标准 <invoke> 结构)。宽松判定,避免把正常台词误伤。</summary>
@@ -2927,19 +2879,19 @@ public class AuraCanAiCore : IDisposable
 				{
 					sb.Append("在场:");
 					foreach (var (n, d, lk, meta) in list.Take(5))
-						sb.Append(' ').Append(n).Append('(').Append(string.IsNullOrEmpty(meta) ? "" : meta + ",").Append(d.ToString("F0")).Append("米").Append(lk ? ",正在看你" : "").Append(')');
+						sb.Append(' ').Append(n).Append('(').Append(string.IsNullOrEmpty(meta) ? "" : meta + ",").Append("距离").Append(d.ToString("F0")).Append("m").Append(lk ? ",正在看你" : "").Append(')');
 					sb.Append("; ");
 				}
 				else sb.Append("身边没有其他人; ");
 			}
 			sb.Append("你:").Append(Movement.StatusText()).Append(". ");
-			sb.Append(IsInParty() ? "队伍:在小队(队友的话用 /p 能听到); " : "队伍:一个人(不在小队); ");
+			sb.Append(IsInParty() ? "队伍:在小队; " : "队伍:一个人(不在小队); ");
 			// 最近一次移动结果(25 秒内),供模型理解刚才动作的成败
 			if (_lastMoveResult != null && (DateTime.Now - _lastMoveResultAt).TotalSeconds <= 25)
 				sb.Append("(刚结束的移动:").Append(_lastMoveResult).Append(")");
-			sb.Append("要确认某人/自己距离用 lookup_player(不带名字=列在场玩家,含种族/性别/在线状态/在你哪边);想坐哪可 list_seats(可传 near=某人看其旁座位);移动/坐下用 rp_body_action(approach/follow/leave/face/sit/stop);想告辞/结束互动/退到一边时用 leave_scene(会走到人少的地方,60 秒没人说话自动退小队);对谁说话/回应谁时可用 face_player 转身看向对方(多人时尤其适用);坐某人旁边 = sit 且 target 填那个玩家名(自动找其最近空座)或按 list_seats 的距离挑 #id;对方让你坐 TA 的**左边/右边**时,先 list_seats(near=那人) 看每个座在 TA 面朝的哪一侧(左/右/前/后),再挑对应座位名/#id 坐。距离永远以当前情况为准——对方可能已走开,别以为还在原位。动作绝不写进台词。已列出的在场者不必重复 lookup_player(除非要看职业等细节或确认是否还在);没变化就别反复查。⚠️ 问起在场某人的种族/性别/样子/在不在/在哪,直接照上面在场名单(名字后面括号里就是)回答;名单里没有的人先用 lookup_player 查。**没有数据就不要凭空猜,也不要假装看(说“我瞅瞅”“哦看到了”然后编)——要么用名单,要么调工具,要么就实话说不认识/没看清。**");
+			sb.Append("要确认在场某人的细节/方位用 lookup_player;移动与坐下用 rp_body_action(approach/follow/leave/sit/stop);坐某人旁边 = sit 且 target 填那个人(对方指定了左/右/前/后就加 side=left/right/front/back,程序会自己挑座);想告辞/退到一边用 leave_scene;对谁说话/回应谁可用 face_player 转身看过去。距离以当前情况为准——对方可能已走开。动作绝不写进台词。已列出的在场者不必重复 lookup_player;问起在场某人的种族/性别/在不在/在哪,照上面名单回答(名单里没有的先查);没数据不许猜、不许假装看。");
 			// 状态机:当前状态/情景/人设/动作/可切换路径(开启时)
-			var stateDesc = State?.DescribeStateForAi(ToolEnabled(AiToolCatalog.SwitchState)) ?? "";
+			var stateDesc = State?.DescribeStateForAi(ToolEnabled(AiToolCatalog.SwitchIdentity)) ?? "";
 			if (stateDesc.Length > 0) sb.Append('\n').Append(stateDesc);
 		}
 		catch (Exception e)
@@ -2957,7 +2909,7 @@ public class AuraCanAiCore : IDisposable
 		"- 禁止描述表情、动作、心理活动;你的每一条回复都会被直接作为游戏内台词发送\\n" +
 		"- 必须使用简体中文输出台词,禁止输出英文或其他外语\\n" +
 		"- 需要调用工具(查人/查座/动作)的那一轮,除工具参数外不要输出任何文字,不要写\"我看一下…\"\"我走过去…\"之类的旁白\\n" +
-		"- 输出必须是可以直接说出口的话,不加任何修饰" +
+		"- 输出必须是可以直接说出口的话,不加任何修饰\n" +
 		"- 禁止说出座位编号(如 #4)、工具名/参数,或“我去查/我去挑/我看一下”这类过程描述:这些是程序的事,你只输出自然的台词";
 
 	/// <summary>当前生效人设的 system 提示(人设 + 输出规则 + 自定义动作表);无人设返回 null。</summary>
@@ -3107,7 +3059,7 @@ public class AuraCanAiCore : IDisposable
 		catch (Exception e) { Plugin.Log?.Error($"退出小队异常: {e}"); return false; }
 	}
 
-	/// <summary>组队动作(AI 工具 party_action):invite=邀请组队 / accept=接受邀请 / leave=退队。</summary>
+	/// <summary>组队动作(invite/accept/leave):供 /aca party 命令与 AI 工具 leave_party 使用。</summary>
 	public string PartyAction(string op, string target)
 	{
 		return (op ?? "").Trim().ToLowerInvariant() switch
@@ -3115,7 +3067,7 @@ public class AuraCanAiCore : IDisposable
 			"invite" => InviteToParty(target),
 			"accept" => AcceptPartyInvite(),
 			"leave" => LeavePartyNow() ? "已退出小队" : "退出小队失败(可能不在小队/状态不允许)",
-			_ => "party_action 的 op 只能是 invite/accept/leave",
+			_ => "op 只能是 invite/accept/leave",
 		};
 	}
 
@@ -4373,7 +4325,7 @@ public class AuraCanAiCore : IDisposable
 			>= -112.5f and < -67.5f => "左侧",
 			_ => "左前",
 		};
-		return $"{dir} {dist:F0}米";
+		return $"{dir} {dist:F0}m";
 	}
 
 	private static readonly string[] ServerNames =

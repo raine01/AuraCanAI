@@ -5,7 +5,7 @@ namespace AuraCanAI.Dalamud.Core;
 /// <summary>
 /// 单层状态机(2026-09-12):
 ///   状态(如 皮下 / 皮上):每个状态绑定一个人设(roleName),并列出「从本状态能切到哪些状态」(nextStateIds,**单向**)。
-///   AI 用 switch_state 切换;只有列出的通路才能切。
+///   AI 用 switch_identity 换身份;只有自己列出的那几个才能换过去。
 /// </summary>
 public sealed class StateMachine
 {
@@ -69,37 +69,25 @@ public sealed class StateMachine
 	{
 		if (!_config.StateMachineEnabled) return "";
 		var sb = new StringBuilder();
-		sb.Append("## 状态机(你当前的状态,切换用工具)\n");
 		var set = CurrentSet;
-		if (set == null || set.states.Count == 0)
-		{
-			sb.Append("- 还没有配置状态;不用管状态机。\n");
-			return sb.ToString();
-		}
 		var cur = CurrentState;
-		if (cur == null)
-		{
-			sb.Append($"- 当前状态机:「{set.name}」;还没有选定状态,不用管状态机。\n");
-			return sb.ToString();
-		}
-		sb.Append($"- 当前状态机:「{set.name}」\n");
-		sb.Append($"- 当前状态:{cur.name}" + (string.IsNullOrWhiteSpace(cur.desc) ? "" : $" —— {cur.desc}") + "\n");
-		sb.Append($"- 你的身份(人设):{(string.IsNullOrEmpty(cur.roleName) ? "未设置,不演角色照常聊天" : cur.roleName)}\n");
-		// 只列“能切过去的通路”(全部状态不暴露;无通路/未启用 switch_state 时整段不出现)
+		if (set == null || cur == null) return "";
+		sb.Append("## 你现在的身份\n");
+		sb.Append($"- 你现在是「{cur.name}」" + (string.IsNullOrWhiteSpace(cur.desc) ? "" : $" —— {cur.desc}") + "\n");
+		sb.Append($"- 你的说话身份(人设):{(string.IsNullOrEmpty(cur.roleName) ? "未设置,不演角色、照常聊天" : cur.roleName)}\n");
+		// 只列“能换成的身份”(全部不暴露;无可换身份/未启用时整段不出现)
 		var allowed = switchToolEnabled ? AllowedStates() : new List<SmState>();
 		if (allowed.Count > 0)
 		{
-			sb.Append("- 你可以切换到的状态(用 switch_state,只能选这几个;每个后面是切过去后你会变成谁):\n");
+			sb.Append("- 需要时可以换个身份(比如对方要你进入角色/上皮,或要你出戏/皮下,又或者你自己的心思、处境变了)。用 switch_identity 换,能换成的只有这几个:\n");
 			foreach (var st in allowed)
 			{
 				var role = string.IsNullOrEmpty(st.roleName) ? "不演角色" : st.roleName;
-				sb.Append($"  · {st.name}" + (string.IsNullOrWhiteSpace(st.desc) ? "" : $"({st.desc})") + $" → {role}\n");
+				sb.Append($"  · {st.name}" + (string.IsNullOrWhiteSpace(st.desc) ? "" : $"({st.desc})") + $" —— 换过去后你是「{role}」\n");
 			}
-			sb.Append("用法:这是你当前的处境/身份,不是台词素材。处境/身份/心情变了就 switch_state 切到对应状态。\n");
-			sb.Append("- 什么时候算「变了」看上面每个状态的括号说明。例:提到「以角色身份/角色扮演/上皮」的那个,就是有人要求你进入角色时要切过去的;提到「没在扮演角色/皮下」的那个,就是对方出戏、要聊现实或游戏本身时切过去的。\n");
-			sb.Append("- 别人要求你切换身份/进入角色/出戏时,不要拒绝、不要解释、也不要反问,直接调用工具切过去,再按新状态的口吻说话。\n");
-			sb.Append("- 但**别频繁来回切**:对方没要求、处境也没变,就保持在当前状态;一轮最多切一次。\n");
-			sb.Append("- 只能切到上面列出的那几个(单向通道);切不过去就保持原状态,不要说“我换好了”。\n");
+			sb.Append("- 别人要求你换个身份时,不要拒绝、不要解释、也不要反问,直接换过去,再用新的口吻说话。\n");
+			sb.Append("- 但**别频繁来回换**:对方没要求、处境也没变,就保持现在的身份;一轮最多换一次。\n");
+			sb.Append("- 只能换成上面列出的那几个;换不了就保持原样,不要说“我换好了”。\n");
 		}
 		sb.Append("动作绝不写进台词。");
 		return sb.ToString();
