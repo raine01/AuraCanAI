@@ -748,3 +748,11 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
   不由用户勾选:有可切换状态 → 给工具 + 提示词列可达状态;无通路 → 工具不加入、提示词不提切换。
 - `ToolEnabled("switch_state")` 直接返回 true(它不在 tools 列表里,不能按“未勾选”过滤掉)。
 - 旧的 tools 列表里若残留 `switch_state`,启动时会被清洗掉(EnsureStateMachineState / SaveStateMachineJson 都按目录白名单过滤)。
+
+## 删除「做本状态的待机动作」相关(2026-09-12,用户口径)
+- 移除 `rp_idle_action` 工具的**全部相关**:`AiToolCatalog` 条目与常量、`BuildBodyActionTools` 里的工具、`RunInfoToolCore` case、
+  infoCalls 白名单、`LooksLikeToolLeak` 关键字。
+- 同时删掉 `StateMachine.PerformIdleAction()` 与命令 `/aca idle`(它们只服务于“手动指定动作”)。
+- **保留**:每状态的待机动作列表、**按冷却自动轮换**(`StateMachine.Tick`)、位置记录 `/aca pos`(自动轮换走位用)。
+- 提示词里“本状态动作”那行去掉“也可用 rp_idle_action 指定”;help 页同步。
+- 工具集现在 7 项:rp_body_action / face_player / lookup_player / list_seats / rp_emote / party_action / leave_scene。

@@ -115,7 +115,6 @@ public static class AiToolCatalog
 	public const string FacePlayer = "face_player";
 	public const string LookupPlayer = "lookup_player";
 	public const string ListSeats = "list_seats";
-	public const string IdleAction = "rp_idle_action";
 	public const string RoleEmote = "rp_emote";
 	public const string SwitchState = "switch_state";
 	public const string PartyAction = "party_action";
@@ -127,7 +126,6 @@ public static class AiToolCatalog
 		(FacePlayer, "转身看向某人"),
 		(LookupPlayer, "查看在场玩家（谁在场/谁在看你）"),
 		(ListSeats, "查看可坐座位"),
-		(IdleAction, "做本状态的待机动作"),
 		(RoleEmote, "做角色自定义动作"),
 		(PartyAction, "组队（邀请/接受/退队）"),
 		(LeaveScene, "离开场地（退到人少处）"),

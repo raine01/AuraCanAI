@@ -2099,7 +2099,7 @@ public class AuraCanAiCore : IDisposable
 			var actionCall = calls.FirstOrDefault(c => c.name == "rp_body_action");
 			bool hasAction = !string.IsNullOrEmpty(actionCall.name);
 			// 信息/轻动作工具(查询 或 纯转身看向):face_player 也走回填循环,让模型决定之后说/动什么
-			var infoCalls = calls.Where(c => c.name is "lookup_player" or "list_seats" or "face_player" or "rp_emote" or "leave_scene" or "switch_state" or "rp_idle_action" or "party_action").ToList();
+			var infoCalls = calls.Where(c => c.name is "lookup_player" or "list_seats" or "face_player" or "rp_emote" or "leave_scene" or "switch_state" or "party_action").ToList();
 			if (hasAction && infoCalls.Count == 0)
 			{
 				// 纯动作轮:解析并执行
@@ -2357,12 +2357,6 @@ public class AuraCanAiCore : IDisposable
 					try { stateName = (JObject.Parse(argsJson)["state"]?.ToString() ?? "").Trim(); } catch { }
 					return State.SwitchState(stateName).message;
 				}
-				case "rp_idle_action":
-				{
-					var idleName = "";
-					try { idleName = (JObject.Parse(argsJson)["name"]?.ToString() ?? "").Trim(); } catch { }
-					return State.PerformIdleAction(idleName);
-				}
 				case "party_action":
 				{
 					var op = ""; var target = "";
@@ -2531,22 +2525,15 @@ public class AuraCanAiCore : IDisposable
 				}, new[] { "name" }));
 		}
 
-		// 状态机工具(开启时):切状态(仅勾选互通的)+ 指定待机动作
+		// 状态机工具(开启时):切状态(只有存在通路时才给)
 		if (_config.StateMachineEnabled && State != null)
 		{
 			var allowed = State.AllowedStates();
 			if (State.CurrentState != null && allowed.Count > 0)
 			{
 				tools.Add(Func("switch_state",
-					"切换你的角色状态/身份(如 皮下/皮上/心情…)。处境/身份/心情变了就用它;别人要求你上皮/出戏时不要拒绝,直接切。**只能切到列出的这几个**(没勾选互通的切不过去)。如有人正在和你互动,优先切到“角色扮演/对话”类的状态。可用: " + string.Join(" / ", allowed.Select(s => s.name)),
+					"切换你的角色状态/身份(如 皮下/皮上/心情…)。处境/身份/心情变了就用它;别人要求你上皮/出戏时不要拒绝,直接切。**只能切到列出的这几个**(没通路就切不过去)。如有人正在和你互动,优先切到“角色扮演/对话”类的状态。可用: " + string.Join(" / ", allowed.Select(s => s.name)),
 					new JObject { ["state"] = new JObject { ["type"] = "string", ["enum"] = new JArray(allowed.Select(s => JToken.FromObject(s.name)).ToArray()) } }, new[] { "state" }));
-			}
-			var curState = State.CurrentState;
-			if (curState != null && curState.actions.Count > 0)
-			{
-				tools.Add(Func("rp_idle_action",
-					"做当前状态动作列表里的某个动作(和自动轮换的是同一批;带位置的会先走过去)。想做特定动作而不是等它自动轮换时用。可用: " + string.Join(" / ", curState.actions.Select(a => StateMachine.DisplayName(a))),
-					new JObject { ["name"] = new JObject { ["type"] = "string", ["enum"] = new JArray(curState.actions.Select(a => JToken.FromObject(StateMachine.DisplayName(a))).ToArray()) } }, new[] { "name" }));
 			}
 		}
 
@@ -2678,7 +2665,6 @@ public class AuraCanAiCore : IDisposable
 		|| text.Contains("<invoke", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("<parameter", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("rp_body_action", StringComparison.OrdinalIgnoreCase)
-		|| text.Contains("rp_idle_action", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("switch_state", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("party_action", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("tool_calls", StringComparison.OrdinalIgnoreCase);

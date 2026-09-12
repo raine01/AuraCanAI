@@ -136,25 +136,6 @@ public sealed class StateMachine
 		StartAction(PickRandom(actions, _idleActionName), actions);
 	}
 
-	/// <summary>手动执行一个待机动作(AI 工具 rp_idle_action / /aca idle)。空名字 = 随机一个。</summary>
-	public string PerformIdleAction(string name)
-	{
-		var s = CurrentState;
-		if (s == null) return "状态机没有当前状态";
-		var actions = s.actions ?? new List<IdleAction>();
-		if (actions.Count == 0) return $"状态「{s.name}」没有配置动作列表";
-		if (string.IsNullOrWhiteSpace(name))
-		{
-			var r = PickRandom(actions, _idleActionName);
-			StartAction(r, actions);
-			return $"成功:开始做「{r.name}」";
-		}
-		var a = actions.FirstOrDefault(x => x.name == name) ?? actions.FirstOrDefault(x => x.emote == name);
-		if (a == null) return $"没有叫「{name}」的动作;可用: {Names(actions, x => x.name)}";
-		StartAction(a, actions);
-		return $"成功:开始做「{a.name}」" + (a.hasPos ? "(先走过去,到位后做动作)" : "");
-	}
-
 	private void StartAction(IdleAction a, List<IdleAction> actions)
 	{
 		_idleActionName = a.name;
@@ -297,7 +278,7 @@ public sealed class StateMachine
 		}
 		if (cur.actions.Count > 0)
 		{
-			sb.Append("- 本状态动作(会自动轮换,也可用 rp_idle_action 指定):");
+			sb.Append("- 本状态动作(会自动轮换):");
 			foreach (var a in cur.actions)
 			{
 				var d = new List<string>();
