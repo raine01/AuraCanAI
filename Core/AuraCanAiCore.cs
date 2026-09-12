@@ -128,6 +128,14 @@ public class AuraCanAiCore : IDisposable
 		}
 		SyncApiKeyFromConfig();
 		EnsureValidCurrentRole();
+		// 状态机首次使用:种一个默认示例(一个第一层 + 两个第二层,构成三角形)
+		if (_config.SmMoods.Count == 0)
+		{
+			_config.SmMoods = Defaults.DefaultStateMachine();
+			_config.SmCurrentMoodId = _config.SmMoods[0].id;
+			_config.SmCurrentSceneId = _config.SmMoods[0].scenes[0].id;
+			try { config.Save(pi); } catch { }
+		}
 
 		Tts = new TtsService(config.TtsWorkers) { Enabled = config.TtsEnabled, Volume = config.TtsVolume, Rate = config.TtsRate };
 		State = new StateMachine(this, config); // 状态机(在 BehaviorEngine/ResetChatHistory 之前建,IsRolePlaying 依赖它)

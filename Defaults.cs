@@ -79,6 +79,39 @@ public static class Defaults
 		channelConfig = DefaultChannelConfig(),
 	};
 
+	/// <summary>默认状态机示例:一个第一层(角色状态) + 两个第二层(情景),三者构成三角形(直观示例)。
+	/// 人设留空,由用户自己在网页选定;路径互相连通(不勾选才代表不限)。</summary>
+	public static List<SmMood> DefaultStateMachine() => new()
+	{
+		new SmMood
+		{
+			id = 1,
+			name = "平常",
+			desc = "没有什么特别的情绪时",
+			scenes = new List<SmScene>
+			{
+				new SmScene
+				{
+					id = 1,
+					name = "待机",
+					desc = "没有人互动、自己待着的时候",
+					roleName = "",
+					actions = new List<IdleAction>(),
+					nextSceneIds = new List<int> { 2 },
+				},
+				new SmScene
+				{
+					id = 2,
+					name = "对话",
+					desc = "有人在和你说话的时候",
+					roleName = "",
+					actions = new List<IdleAction>(),
+					nextSceneIds = new List<int> { 1 },
+				},
+			},
+		},
+	};
+
 	public static LLMConfig DefaultLlmConfig() => new()
 	{
 		// 默认不启用任何角色(前端显示"请选择角色"),LLM 以普通助手模式回答

@@ -552,3 +552,9 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 3. 待机动作自动轮换:cooldown 到点换动作;有位置应先走位再表情;`/aca idle 名称` 手动测。
 4. `/aca pos` 记录位置(带名 / 先武装)是否落到正确动作并能在网页显示(点「刷新」)。
 5. `/aca party invite 名字`、`/aca party accept`:**InviteToPartyContentId / RespondToInvitation 的签名/参数语义必须实测**;失败看 xllog `[组队]` 行,必要时改回纯命令方案。
+
+## 前端改版(2026-09-12 追加,用户口径)
+- 前端**不要那么多字**:已删掉长篇说明,顶部只留「启用状态机 / 当前状态徽章 / 刷新 / 保存」。
+- **默认状态机示例**:`Defaults.DefaultStateMachine()` = 1 个第一层「平常」+ 2 个第二层「待机/对话」,路径互指 → 节点图上呈**三角形**。`AuraCanAiCore` 构造里 `if (_config.SmMoods.Count == 0)` 种入并保存(删光后会再次种入,属预期)。
+- 视图改为 **SVG 节点图**(`#smGraph` + `smDrawGraph()`):第一层节点在上、其第二层节点在下,树边为实线、路径为虚弧线;蓝底=当前状态、浅蓝=选中;点节点在下方面板编辑(名称/说明/人设/路径/动作)。去掉了原来的 `#smMoodBar`/`#smSceneBar` 页签与 `#smMoodEditor`/`#smSceneEditor`,统一为 `#smEditor`。新增 `#smAddMoodBtn`(映射 `smAddMood`)/`#smAddSceneBtn`。
+- 图每次 `smRender`/输入改名/轮询都会重画(轮询 2s 只更新徽章+高亮,不动表单,避免抢焦点)。
