@@ -139,6 +139,18 @@ public class AuraCanAiCore : IDisposable
 			_config.SetLlmConfig(StripKey(_llmSetting));
 			try { config.Save(pi); } catch { }
 		}
+		// 迁移:「皮下」人设换新(温柔御姐+死宅上班族版);只改仍是旧默认那份,不动用户自己改过的
+		if (!_config.SubskinPersonaV2)
+		{
+			_config.SubskinPersonaV2 = true;
+			var sub = _llmSetting.roles.FirstOrDefault(r => r.name == "皮下");
+			if (sub != null && (sub.setting ?? "").Contains("该上线上线"))
+			{
+				sub.setting = Defaults.DefaultRoleSettingSubskin;
+				_config.SetLlmConfig(StripKey(_llmSetting));
+			}
+			try { config.Save(pi); } catch { }
+		}
 
 		Tts = new TtsService(config.TtsWorkers) { Enabled = config.TtsEnabled, Volume = config.TtsVolume, Rate = config.TtsRate };
 		State = new StateMachine(this, config); // 状态机(在 BehaviorEngine/ResetChatHistory 之前建,IsRolePlaying 依赖它)
