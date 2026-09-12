@@ -104,63 +104,25 @@ public static class Defaults
 
 	/// <summary>默认状态机示例:一个第一层(角色状态) + 两个第二层(情景),三者构成三角形(直观示例)。
 	/// 人设留空,由用户自己在网页选定;路径互相连通(不勾选才代表不限)。</summary>
-	public static List<SmMood> DefaultStateMachine() => new()
+	public static List<SmState> DefaultStateMachine() => new()
 	{
-		// 第一层「皮下」:以玩家本人身份(不上皮),两个情景
-		new SmMood
+		new SmState
 		{
 			id = 1,
 			name = "皮下",
-			desc = "没有在扮演角色,以玩家本人的身份说话时",
-			scenes = new List<SmScene>
-			{
-				new SmScene
-				{
-					id = 1,
-					name = "待机",
-					desc = "没事做、在旁边挂着的时候",
-					roleName = "皮下",
-					actions = new List<IdleAction>(),
-					nextSceneIds = new List<int> { 2 },
-				},
-				new SmScene
-				{
-					id = 2,
-					name = "接待",
-					desc = "有人来串门/打招呼、你在招呼人的时候",
-					roleName = "皮下",
-					actions = new List<IdleAction>(),
-					nextSceneIds = new List<int> { 1 },
-				},
-			},
+			desc = "没有在扮演角色,以玩家本人的身份说话时(不演角色,照常聊天)",
+			roleName = "皮下",
+			actions = new List<IdleAction>(),
+			nextStateIds = new List<int> { 2 },
 		},
-		// 第一层「皮上」:扮演角色,两个情景
-		new SmMood
+		new SmState
 		{
 			id = 2,
 			name = "皮上",
-			desc = "你在以角色身份与人互动时",
-			scenes = new List<SmScene>
-			{
-				new SmScene
-				{
-					id = 1,
-					name = "待机",
-					desc = "别人还没和你互动时",
-					roleName = "白屿涟音",
-					actions = new List<IdleAction>(),
-					nextSceneIds = new List<int> { 2 },
-				},
-				new SmScene
-				{
-					id = 2,
-					name = "对话",
-					desc = "有人在和你说话时",
-					roleName = "白屿涟音",
-					actions = new List<IdleAction>(),
-					nextSceneIds = new List<int> { 1 },
-				},
-			},
+			desc = "你在以角色身份与人互动时(角色扮演)",
+			roleName = "白屿涟音",
+			actions = new List<IdleAction>(),
+			nextStateIds = new List<int> { 1 },
 		},
 	};
 

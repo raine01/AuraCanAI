@@ -49,8 +49,9 @@ public class Configuration : IPluginConfiguration
 	// ===== 状态机(两层:第一层角色状态 / 第二层情景;2026-09 新增) =====
 	// 独立开关(手动开启才进入角色扮演/状态机);关闭时回退旧行为(用 LLM 配置里的「当前角色」)
 	public bool StateMachineEnabled { get; set; } = false;
-	public int SmCurrentMoodId { get; set; } // 当前第一层(角色状态)
-	public int SmCurrentSceneId { get; set; } // 当前第二层(情景)
+	public int SmCurrentMoodId { get; set; } // [旧]当前第一层;启动时迁移到 SmCurrentStateId
+	public int SmCurrentSceneId { get; set; } // [旧]当前第二层;单层化后不再使用
+	public int SmCurrentStateId { get; set; } // 当前状态(单层状态机)
 	public List<SmMood> SmMoods { get; set; } = new(); // [旧]单状态机的第一层列表(启动时迁移进 SmSets,新代码不再用)
 	public List<SmSet> SmSets { get; set; } = new(); // 状态机列表(可多套)
 	public int SmCurrentSetId { get; set; } // 当前状态机(前端页签;也是运行时用的那套)

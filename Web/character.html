@@ -39,7 +39,7 @@
 	<form id="configForm" method="post">
 		<main class="main">
 			<div class="container py-5">
-				<!-- 状态机(两层:第一层角色状态 / 第二层情景;放在角色设定上面) -->
+				<!-- 状态机(单层;放在角色设定上面) -->
 				<section class="settings-section">
 					<h2 class="heading h3 mb-4 border-bottom pb-2">状态机</h2>
 					<div class="card">
@@ -54,11 +54,10 @@
 								<span class="small ml-2" id="smStatus"></span>
 							</div>
 							<div id="smSetBar" class="mb-2"></div>
-							<svg id="smGraph" class="w-100 border rounded mb-2" style="height:260px;background:#f8f9fa;"></svg>
+							<svg id="smGraph" class="w-100 border rounded mb-2" style="height:180px;background:#f8f9fa;"></svg>
 							<div class="d-flex align-items-center mb-2">
-								<button type="button" class="btn btn-sm btn-outline-success mr-2" id="smAddMoodBtn">+ 状态</button>
-								<button type="button" class="btn btn-sm btn-outline-success mr-2" id="smAddSceneBtn">+ 情景</button>
-								<span class="text-muted small">点节点选择；蓝=当前状态；虚线=可切换</span>
+								<button type="button" class="btn btn-sm btn-outline-success mr-2" id="smAddStateBtn">+ 状态</button>
+								<span class="text-muted small">点节点选中；蓝=当前状态；虚线=勾选互通（可切换）</span>
 							</div>
 							<div id="smEditor"></div>
 						</div>
@@ -562,9 +561,9 @@
 			});
 		}
 
-		// ===== 状态机(多套;每套两层:第一层角色状态 / 第二层情景) =====
-		let sm = { enabled: false, currentSetId: 0, currentMoodId: 0, currentSceneId: 0, sets: [], roles: [], armed: null, currentRole: '' };
-		let smSelSet = 0, smSelMood = 0, smSelScene = 0, smSelKind = 'mood';
+		// ===== 状态机(多套;单层:状态 + 勾选互通) =====
+		let sm = { enabled: false, currentSetId: 0, currentStateId: 0, sets: [], roles: [], armed: null, currentRole: '' };
+		let smSelSet = 0, smSelState = 0;
 		let smEditing = false, smEditTimer = null, smSaveTimer = null;
 
 		function smMarkEditing() {
@@ -573,8 +572,7 @@
 			smEditTimer = setTimeout(function() { smEditing = false; }, 1200);
 		}
 		function smActiveSet() { return (sm.sets || []).find(function(s) { return s.id === smSelSet; }) || null; }
-		function smMood(id) { var set = smActiveSet(); return set ? (set.moods || []).find(function(m) { return m.id === id; }) || null : null; }
-		function smScene(mid, sid) { var m = smMood(mid); return m ? (m.scenes || []).find(function(s) { return s.id === sid; }) || null : null; }
+		function smState(id) { var set = smActiveSet(); return set ? (set.states || []).find(function(s) { return s.id === id; }) || null : null; }
 		function smNextId(list) { var max = 0; (list || []).forEach(function(x) { max = Math.max(max, x.id || 0); }); return max + 1; }
 		function smRoleOpts(selected) {
 			var html = '<option value="">（不使用人设）</option>';
@@ -583,31 +581,21 @@
 			});
 			return html;
 		}
-
 		// 角色改名时同步状态机引用;有改动返回 true
 		function smRenameRoleRefs(oldName, newName) {
 			var changed = false;
 			(sm.sets || []).forEach(function(set) {
-				(set.moods || []).forEach(function(m) {
-					(m.scenes || []).forEach(function(s) {
-						if (s.roleName === oldName) { s.roleName = newName; changed = true; }
-					});
-				});
+				(set.states || []).forEach(function(s) { if (s.roleName === oldName) { s.roleName = newName; changed = true; } });
 			});
 			if (changed) { smRenderSetBar(); smRenderEditor(); }
 			return changed;
 		}
-
-		// 该角色是否正被某个状态机的情景使用(用于删除角色时的校验)
+		// 该角色是否正被某个状态使用(删除角色时校验)
 		function smRoleInUse(roleName) {
 			var hits = [];
 			if (!roleName) return hits;
 			(sm.sets || []).forEach(function(set) {
-				(set.moods || []).forEach(function(m) {
-					(m.scenes || []).forEach(function(s) {
-						if (s.roleName === roleName) hits.push((set.name || '?') + ' / ' + (m.name || '?') + ' / ' + (s.name || '?'));
-					});
-				});
+				(set.states || []).forEach(function(s) { if (s.roleName === roleName) hits.push((set.name || '?') + ' / ' + (s.name || '?')); });
 			});
 			return hits;
 		}
@@ -619,8 +607,7 @@
 					sm = r || {}; sm.sets = sm.sets || []; sm.roles = sm.roles || [];
 					if (!sm.sets.some(function(s) { return s.id === smSelSet; }))
 						smSelSet = sm.currentSetId || (sm.sets[0] ? sm.sets[0].id : 0);
-					var set = smActiveSet();
-					if (!smMood(smSelMood)) { smSelKind = 'mood'; smSelMood = set && set.moods[0] ? set.moods[0].id : 0; smSelScene = 0; }
+					if (!smState(smSelState)) smSelState = (smActiveSet() && smActiveSet().states[0]) ? smActiveSet().states[0].id : 0;
 					smRender();
 				},
 				error: function(x, s, e) { console.error('加载状态机失败:', e); }
@@ -634,14 +621,15 @@
 				success: function(r) {
 					if (JSON.stringify(r.sets || []) !== JSON.stringify(sm.sets || []) && !smEditing && !smSaveTimer) {
 						sm.sets = r.sets || []; sm.roles = r.roles || [];
-						sm.enabled = r.enabled; sm.currentSetId = r.currentSetId; sm.currentMoodId = r.currentMoodId; sm.currentSceneId = r.currentSceneId;
+						sm.enabled = r.enabled; sm.currentSetId = r.currentSetId; sm.currentStateId = r.currentStateId;
 						sm.currentRole = r.currentRole; sm.armed = r.armed;
 						if (!sm.sets.some(function(s) { return s.id === smSelSet; })) smSelSet = sm.currentSetId || (sm.sets[0] ? sm.sets[0].id : 0);
+						if (!smState(smSelState)) smSelState = (smActiveSet() && smActiveSet().states[0]) ? smActiveSet().states[0].id : 0;
 						$('#smEnabled').prop('checked', !!r.enabled);
 						smRender();
 						return;
 					}
-					sm.enabled = r.enabled; sm.currentSetId = r.currentSetId; sm.currentMoodId = r.currentMoodId; sm.currentSceneId = r.currentSceneId;
+					sm.enabled = r.enabled; sm.currentSetId = r.currentSetId; sm.currentStateId = r.currentStateId;
 					sm.currentRole = r.currentRole; sm.armed = r.armed;
 					$('#smEnabled').prop('checked', !!r.enabled);
 					smRenderCurrent();
@@ -661,15 +649,14 @@
 
 		function smRenderCurrent() {
 			var set = (sm.sets || []).find(function(s) { return s.id === sm.currentSetId; });
-			var m = set ? (set.moods || []).find(function(x) { return x.id === sm.currentMoodId; }) : null;
-			var s = m ? (m.scenes || []).find(function(x) { return x.id === sm.currentSceneId; }) : null;
+			var st = set ? (set.states || []).find(function(x) { return x.id === sm.currentStateId; }) : null;
 			if (!sm.enabled) {
 				$('#smCurrentBadge').removeClass('badge-primary').addClass('badge-secondary').text('未启用');
 				return;
 			}
 			var role = sm.currentRole ? (' · ' + sm.currentRole) : ' · 无人设';
 			$('#smCurrentBadge').removeClass('badge-secondary').addClass('badge-primary')
-				.text((set ? set.name : '?') + ' / ' + (m ? m.name : '?') + ' / ' + (s ? s.name : '?') + role);
+				.text((set ? set.name : '?') + ' / ' + (st ? st.name : '未选状态') + role);
 		}
 
 		// 状态机页签(像场景设定的房子页签)
@@ -692,24 +679,24 @@
 			if (smSelSet === id) return;
 			smSelSet = id;
 			var set = smActiveSet();
-			smSelKind = 'mood'; smSelMood = set && set.moods[0] ? set.moods[0].id : 0; smSelScene = 0;
+			smSelState = (set && set.states[0]) ? set.states[0].id : 0;
 			smRenderSetBar(); smDrawGraph(); smRenderEditor();
 			$.ajax({
 				url: '/SetCurrentStateMachine', type: 'POST', contentType: 'application/json', data: JSON.stringify({ id: id }),
 				success: function(r) {
 					if (!r || r.result !== 'success') return;
-					sm.currentSetId = r.currentSetId; sm.currentMoodId = r.currentMoodId; sm.currentSceneId = r.currentSceneId; sm.currentRole = r.currentRole;
+					sm.currentSetId = r.currentSetId; sm.currentStateId = r.currentStateId; sm.currentRole = r.currentRole;
 					smRenderCurrent(); smDrawGraph();
 				}
 			});
 		}
 
 		function smAddSet() {
-			var name = prompt('新状态机名字（如：白屿涟音 / 战斗 / 日常）：');
+			var name = prompt('新状态机名字（如：白屿涟音 / 日常 / 战斗）：');
 			if (!name || !name.trim()) return;
 			var id = smNextId(sm.sets);
-			sm.sets.push({ id: id, name: name.trim(), moods: [] });
-			smSelSet = id; smSelKind = 'mood'; smSelMood = 0; smSelScene = 0;
+			sm.sets.push({ id: id, name: name.trim(), states: [] });
+			smSelSet = id; smSelState = 0;
 			smRender(); smSave(true);
 			$.ajax({ url: '/SetCurrentStateMachine', type: 'POST', contentType: 'application/json', data: JSON.stringify({ id: id }) });
 		}
@@ -723,98 +710,55 @@
 
 		function smDeleteSet(s) {
 			if ((sm.sets || []).length <= 1) { showAlert('至少要保留一个状态机', 'warning'); return; }
-			if (!confirm('删除状态机「' + s.name + '」及其全部状态/情景/动作？')) return;
+			if (!confirm('删除状态机「' + s.name + '」及其全部状态/动作？')) return;
 			var wasCurrent = sm.currentSetId === s.id;
 			sm.sets = sm.sets.filter(function(x) { return x.id !== s.id; });
-			if (smSelSet === s.id) {
-				smSelSet = sm.sets[0].id;
-				smSelKind = 'mood'; smSelMood = sm.sets[0].moods[0] ? sm.sets[0].moods[0].id : 0; smSelScene = 0;
-			}
+			if (smSelSet === s.id) { smSelSet = sm.sets[0].id; smSelState = sm.sets[0].states[0] ? sm.sets[0].states[0].id : 0; }
 			smRender(); smSave(true);
 			if (wasCurrent)
 				$.ajax({ url: '/SetCurrentStateMachine', type: 'POST', contentType: 'application/json', data: JSON.stringify({ id: smSelSet }) });
 		}
 
-		// 节点图:上半=第一层(状态),下半=第二层(情景);中间虚线分隔;第一层之间虚线(可自由切)、情景间虚线=路径
+		// 节点图:单排状态点;勾选互通的用虚弧线连起来(蓝=当前状态)
 		function smDrawGraph() {
 			var svg = document.getElementById('smGraph'); if (!svg) return;
-			var W = svg.clientWidth || 800, H = svg.clientHeight || 260;
+			var W = svg.clientWidth || 800, H = svg.clientHeight || 180;
 			svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
 			var set = smActiveSet();
-			var moods = (set && set.moods) || [];
-			var moodW = 150, moodH = 34, sceneW = 118, sceneH = 30, sceneGap = 22, groupGap = 40;
-			var groups = moods.map(function(m) {
-				var n = Math.max(1, (m.scenes || []).length);
-				return { m: m, w: Math.max(moodW, n * sceneW + (n - 1) * sceneGap) };
-			});
-			var totalW = groups.reduce(function(a, g) { return a + g.w; }, 0) + groupGap * Math.max(0, groups.length - 1);
-			var x = Math.max(58, (W - totalW) / 2);
-			var moodY = 34, sceneY = 168;
-			var nodes = [], edges = [], moodNodes = [];
-			groups.forEach(function(g) {
-				var m = g.m, scenes = m.scenes || [];
-				var cx = x + g.w / 2;
-				var mx = cx - moodW / 2, my = moodY;
-				var moodNode = { kind: 'mood', moodId: m.id, id: m.id, x: mx, y: my, w: moodW, h: moodH, label: m.name || '(未命名)', cur: sm.currentMoodId === m.id, sel: smSelKind === 'mood' && smSelMood === m.id };
-				nodes.push(moodNode); moodNodes.push(moodNode);
-				var n = Math.max(1, scenes.length);
-				var rowW = n * sceneW + (n - 1) * sceneGap;
-				var sx0 = cx - rowW / 2;
-				scenes.forEach(function(s, i) {
-					var sx = sx0 + i * (sceneW + sceneGap), sy = sceneY;
-					nodes.push({ kind: 'scene', moodId: m.id, id: s.id, x: sx, y: sy, w: sceneW, h: sceneH, label: s.name || '(未命名)', cur: sm.currentMoodId === m.id && sm.currentSceneId === s.id, sel: smSelKind === 'scene' && smSelMood === m.id && smSelScene === s.id });
-					edges.push({ type: 'tree', x1: mx + moodW / 2, y1: my + moodH, x2: sx + sceneW / 2, y2: sy });
-				});
-				scenes.forEach(function(s) {
-					var a = nodes.find(function(nd) { return nd.kind === 'scene' && nd.moodId === m.id && nd.id === s.id; });
-					if (!a) return;
-					(s.nextSceneIds || []).forEach(function(tid) {
-						if (tid <= s.id) return; // 同一条路径只画一次
-						var b = nodes.find(function(nd) { return nd.kind === 'scene' && nd.moodId === m.id && nd.id === tid; });
-						if (b) edges.push({ type: 'path', x1: a.x + a.w / 2, y1: a.y + a.h, x2: b.x + b.w / 2, y2: b.y + b.h });
-					});
-				});
-				x += g.w + groupGap;
-			});
-			// 第一层之间由 AI 自由切换 → 虚线连接相邻状态节点
-			for (var mi = 1; mi < moodNodes.length; mi++) {
-				var ma = moodNodes[mi - 1], mb = moodNodes[mi];
-				edges.push({ type: 'moodlink', x1: ma.x + ma.w, y1: ma.y + ma.h / 2, x2: mb.x, y2: mb.y + mb.h / 2 });
-			}
+			var states = (set && set.states) || [];
+			var nodeW = 128, nodeH = 34, gap = 26;
+			var maxTotal = W - 40;
+			if (states.length > 1 && states.length * nodeW + (states.length - 1) * gap > maxTotal)
+				gap = Math.max(8, (maxTotal - states.length * nodeW) / (states.length - 1));
+			var total = states.length * nodeW + Math.max(0, states.length - 1) * gap;
+			var x0 = Math.max(20, (W - total) / 2);
+			var y = (H - nodeH) / 2 + 12;
+			var pos = {};
+			states.forEach(function(s, i) { pos[s.id] = x0 + i * (nodeW + gap); });
 			var parts = [];
-			// 分隔虚线 + 左侧行标
-			var sepY = (moodY + moodH + sceneY) / 2;
-			parts.push('<line x1="0" y1="' + sepY + '" x2="' + W + '" y2="' + sepY + '" stroke="#c2cddb" stroke-width="1" stroke-dasharray="6 4"/>');
-			parts.push('<text x="8" y="' + (moodY + moodH / 2 + 4) + '" font-size="12" fill="#adb5bd">状态</text>');
-			parts.push('<text x="8" y="' + (sceneY + sceneH / 2 + 4) + '" font-size="12" fill="#adb5bd">情景</text>');
-			edges.forEach(function(e) {
-				if (e.type === 'tree') {
-					parts.push('<line x1="' + e.x1 + '" y1="' + e.y1 + '" x2="' + e.x2 + '" y2="' + e.y2 + '" stroke="#c2cddb" stroke-width="1.5"/>');
-				} else if (e.type === 'moodlink') {
-					parts.push('<line x1="' + e.x1 + '" y1="' + e.y1 + '" x2="' + e.x2 + '" y2="' + e.y2 + '" stroke="#7aa7d8" stroke-width="1.5" stroke-dasharray="4 3"/>');
-				} else {
-					var by = Math.max(e.y1, e.y2) + 22;
-					parts.push('<path d="M ' + e.x1 + ' ' + e.y1 + ' C ' + e.x1 + ' ' + by + ', ' + e.x2 + ' ' + by + ', ' + e.x2 + ' ' + e.y2 + '" fill="none" stroke="#7aa7d8" stroke-width="1.5" stroke-dasharray="4 3"/>');
-				}
+			// 互通连线(上方虚弧线;每对只画一次)
+			states.forEach(function(s) {
+				(s.nextStateIds || []).forEach(function(tid) {
+					if (tid <= s.id || pos[tid] == null) return;
+					var xa = pos[s.id] + nodeW / 2, xb = pos[tid] + nodeW / 2;
+					parts.push('<path d="M ' + xa + ' ' + y + ' Q ' + ((xa + xb) / 2) + ' ' + (y - 40) + ', ' + xb + ' ' + y + '" fill="none" stroke="#7aa7d8" stroke-width="1.5" stroke-dasharray="4 3"/>');
+				});
 			});
-			nodes.forEach(function(nd) {
-				var fill = nd.cur ? '#2f6fed' : (nd.sel ? '#dbe9ff' : '#ffffff');
-				var stroke = nd.cur ? '#2f6fed' : (nd.sel ? '#288cff' : (nd.kind === 'mood' ? '#6c757d' : '#adb5bd'));
-				var color = nd.cur ? '#ffffff' : '#343a40';
-				parts.push('<g class="sm-node" data-kind="' + nd.kind + '" data-mood="' + nd.moodId + '" data-scene="' + (nd.kind === 'scene' ? nd.id : '') + '" style="cursor:pointer">' +
-					'<rect x="' + nd.x + '" y="' + nd.y + '" width="' + nd.w + '" height="' + nd.h + '" rx="8" fill="' + fill + '" stroke="' + stroke + '" stroke-width="1.6"/>' +
-					'<text x="' + (nd.x + nd.w / 2) + '" y="' + (nd.y + nd.h / 2 + 4) + '" text-anchor="middle" font-size="13" fill="' + color + '">' + escAttr(nd.label) + '</text></g>');
+			states.forEach(function(s) {
+				var nx = pos[s.id];
+				var cur = sm.currentStateId === s.id;
+				var sel = smSelState === s.id;
+				var fill = cur ? '#2f6fed' : (sel ? '#dbe9ff' : '#ffffff');
+				var stroke = cur ? '#2f6fed' : (sel ? '#288cff' : '#adb5bd');
+				var color = cur ? '#ffffff' : '#343a40';
+				parts.push('<g class="sm-node" data-state="' + s.id + '" style="cursor:pointer">' +
+					'<rect x="' + nx + '" y="' + y + '" width="' + nodeW + '" height="' + nodeH + '" rx="8" fill="' + fill + '" stroke="' + stroke + '" stroke-width="1.6"/>' +
+					'<text x="' + (nx + nodeW / 2) + '" y="' + (y + nodeH / 2 + 4) + '" text-anchor="middle" font-size="13" fill="' + color + '">' + escAttr(s.name || '(未命名)') + '</text></g>');
 			});
+			if (states.length === 0) parts.push('<text x="20" y="' + (H / 2) + '" font-size="13" fill="#adb5bd">还没有状态,点「+ 状态」新建</text>');
 			svg.innerHTML = parts.join('');
 			svg.querySelectorAll('.sm-node').forEach(function(el) {
-				el.addEventListener('click', function() {
-					var kind = el.getAttribute('data-kind');
-					smSelKind = kind;
-					smSelMood = +el.getAttribute('data-mood');
-					smSelScene = kind === 'scene' ? +el.getAttribute('data-scene') : 0;
-					smDrawGraph();
-					smRenderEditor();
-				});
+				el.addEventListener('click', function() { smSelState = +el.getAttribute('data-state'); smDrawGraph(); smRenderEditor(); });
 			});
 		}
 
@@ -822,109 +766,81 @@
 			var c = $('#smEditor').empty();
 			var set = smActiveSet();
 			if (!set) { c.append('<div class="text-muted small">先建一个状态机（+ 新状态机）。</div>'); return; }
-			var m = smMood(smSelMood);
-			if (!m) { c.append('<div class="text-muted small">点「+ 状态」新建一个角色状态（第一层）。</div>'); return; }
-			if (smSelKind === 'mood') {
-				c.append(smMoodEditorHtml(m));
-				return;
-			}
-			var s = smScene(m.id, smSelScene);
-			if (!s) { c.append('<div class="text-muted small">点「+ 情景」新建一个情景（第二层）。</div>'); return; }
-			c.append(smSceneEditorHtml(m, s));
+			var s = smState(smSelState);
+			if (!s) { c.append('<div class="text-muted small">点「+ 状态」新建一个状态（如：皮下 / 皮上）。</div>'); return; }
+			c.append(smStateEditorHtml(set, s));
 		}
 
-		function smMoodEditorHtml(m) {
-			return `
-			<div class="border rounded p-2">
-				<div class="row g-2 align-items-end">
-					<div class="col-md-4">
-						<input type="text" class="form-control form-control-sm sm-mood-name" data-mood="${m.id}" value="${escAttr(m.name || '')}" placeholder="状态名（如：心情很糟糕）">
-					</div>
-					<div class="col-md-5">
-						<input type="text" class="form-control form-control-sm sm-mood-desc" data-mood="${m.id}" value="${escAttr(m.desc || '')}" placeholder="给 AI 的说明（什么时候在这个状态）">
-					</div>
-					<div class="col-md-3 text-right">
-						<button type="button" class="btn btn-sm btn-outline-danger sm-del-mood" data-mood="${m.id}">删除</button>
-					</div>
-				</div>
-			</div>`;
-		}
-
-		function smSceneEditorHtml(m, s) {
-			var sib = (m.scenes || []).filter(function(x) { return x.id !== s.id; });
-			var pathHtml = sib.length === 0
-				? '<span class="text-muted small">同状态没有其他情景</span>'
-				: sib.map(function(x) {
-					var on = (s.nextSceneIds || []).indexOf(x.id) >= 0;
-					var id = 'smpath_' + s.id + '_' + x.id;
-					return '<div class="form-check form-check-inline mr-3"><input type="checkbox" class="form-check-input sm-path" id="' + id + '" data-mood="' + m.id + '" data-scene="' + s.id + '" data-target="' + x.id + '" ' + (on ? 'checked' : '') + '><label class="form-check-label small" for="' + id + '">' + escAttr(x.name) + '</label></div>';
+		function smStateEditorHtml(set, s) {
+			var others = (set.states || []).filter(function(x) { return x.id !== s.id; });
+			var linkHtml = others.length === 0
+				? '<span class="text-muted small">还没有别的状态</span>'
+				: others.map(function(x) {
+					var on = (s.nextStateIds || []).indexOf(x.id) >= 0;
+					var id = 'smlink_' + s.id + '_' + x.id;
+					return '<div class="form-check form-check-inline mr-3"><input type="checkbox" class="form-check-input sm-link" id="' + id + '" data-state="' + s.id + '" data-target="' + x.id + '" ' + (on ? 'checked' : '') + '><label class="form-check-label small" for="' + id + '">' + escAttr(x.name) + '</label></div>';
 				}).join('');
-			var actionsHtml = (s.actions || []).map(function(a, i) { return smActionRow(m.id, s.id, a, i); }).join('');
+			var actionsHtml = (s.actions || []).map(function(a, i) { return smActionRow(set.id, s.id, a, i); }).join('');
 			return `
 			<div class="border rounded p-2">
 				<div class="row g-2 align-items-end mb-2">
 					<div class="col-md-3">
-						<input type="text" class="form-control form-control-sm sm-scene-name" data-mood="${m.id}" data-scene="${s.id}" value="${escAttr(s.name || '')}" placeholder="情景名（如：待机）">
+						<input type="text" class="form-control form-control-sm sm-state-name" data-state="${s.id}" value="${escAttr(s.name || '')}" placeholder="状态名（如：皮下 / 皮上）">
 					</div>
 					<div class="col-md-3">
-						<select class="form-control form-control-sm sm-scene-role" data-mood="${m.id}" data-scene="${s.id}">${smRoleOpts(s.roleName)}</select>
+						<select class="form-control form-control-sm sm-state-role" data-state="${s.id}">${smRoleOpts(s.roleName)}</select>
 					</div>
 					<div class="col-md-3">
-						<input type="text" class="form-control form-control-sm sm-scene-desc" data-mood="${m.id}" data-scene="${s.id}" value="${escAttr(s.desc || '')}" placeholder="给 AI 的说明">
+						<input type="text" class="form-control form-control-sm sm-state-desc" data-state="${s.id}" value="${escAttr(s.desc || '')}" placeholder="给 AI 的说明（什么时候在这个状态）">
 					</div>
 					<div class="col-md-3 text-right">
-						<button type="button" class="btn btn-sm btn-outline-danger sm-del-scene" data-mood="${m.id}" data-scene="${s.id}">删除</button>
+						<button type="button" class="btn btn-sm btn-outline-danger sm-del-state" data-state="${s.id}">删除</button>
 					</div>
 				</div>
-				<div class="mb-2"><span class="text-muted small mr-2">可切换到：</span>${pathHtml}</div>
+				<div class="mb-2"><span class="text-muted small mr-2">勾选互通（只有勾上的状态才能互相切换）：</span>${linkHtml}</div>
 				<div class="sm-actions">${actionsHtml}</div>
-				<button type="button" class="btn btn-outline-primary btn-sm sm-add-action" data-mood="${m.id}" data-scene="${s.id}">+ 动作</button>
+				<button type="button" class="btn btn-outline-primary btn-sm sm-add-action" data-state="${s.id}">+ 动作</button>
 			</div>`;
 		}
 
-		function smActionRow(mid, sid, a, i) {
+		function smActionRow(setId, stateId, a, i) {
 			a = a || {};
 			var pos = a.hasPos ? ('(' + (+a.x || 0).toFixed(1) + ', ' + (+a.z || 0).toFixed(1) + ')') : '—';
 			return `
 			<div class="row g-2 align-items-center mb-1">
 				<div class="col-md-3">
-					<input type="text" class="form-control form-control-sm sm-act-name" data-mood="${mid}" data-scene="${sid}" data-idx="${i}" value="${escAttr(a.name || '')}" placeholder="名称">
+					<input type="text" class="form-control form-control-sm sm-act-name" data-state="${stateId}" data-idx="${i}" value="${escAttr(a.name || '')}" placeholder="名称">
 				</div>
 				<div class="col-md-2">
-					<input type="text" class="form-control form-control-sm sm-act-emote" data-mood="${mid}" data-scene="${sid}" data-idx="${i}" value="${escAttr(a.emote || '')}" placeholder="动作（表情名）">
+					<input type="text" class="form-control form-control-sm sm-act-emote" data-state="${stateId}" data-idx="${i}" value="${escAttr(a.emote || '')}" placeholder="动作（表情名）">
 				</div>
 				<div class="col-md-2">
-					<input type="number" min="0" class="form-control form-control-sm sm-act-cd" data-mood="${mid}" data-scene="${sid}" data-idx="${i}" value="${a.cooldown || 0}" placeholder="冷却秒">
+					<input type="number" min="0" class="form-control form-control-sm sm-act-cd" data-state="${stateId}" data-idx="${i}" value="${a.cooldown || 0}" placeholder="冷却秒">
 				</div>
 				<div class="col-md-3 text-nowrap">
 					<span class="small text-muted mr-1">${pos}</span>
-					<button type="button" class="btn btn-sm btn-outline-info mr-1 sm-arm-pos" data-mood="${mid}" data-scene="${sid}" data-idx="${i}">记录位置</button>
-					<button type="button" class="btn btn-sm btn-outline-secondary sm-clear-pos" data-mood="${mid}" data-scene="${sid}" data-idx="${i}">清空</button>
+					<button type="button" class="btn btn-sm btn-outline-info mr-1 sm-arm-pos" data-state="${stateId}" data-idx="${i}">记录位置</button>
+					<button type="button" class="btn btn-sm btn-outline-secondary sm-clear-pos" data-state="${stateId}" data-idx="${i}">清空</button>
 				</div>
 				<div class="col-md-2">
-					<button type="button" class="btn btn-outline-danger btn-sm w-100 sm-del-action" data-mood="${mid}" data-scene="${sid}" data-idx="${i}">删除</button>
+					<button type="button" class="btn btn-outline-danger btn-sm w-100 sm-del-action" data-state="${stateId}" data-idx="${i}">删除</button>
 				</div>
 			</div>`;
 		}
 
 		function smApplyInput($el) {
-			var mid = +$el.data('mood'), sid = +$el.data('scene'), idx = $el.data('idx');
-			if ($el.hasClass('sm-mood-name')) { var m = smMood(mid); if (m) m.name = $el.val(); }
-			else if ($el.hasClass('sm-mood-desc')) { var m2 = smMood(mid); if (m2) m2.desc = $el.val(); }
-			else if ($el.hasClass('sm-scene-name')) { var s = smScene(mid, sid); if (s) s.name = $el.val(); }
-			else if ($el.hasClass('sm-scene-desc')) { var s2 = smScene(mid, sid); if (s2) s2.desc = $el.val(); }
-			else if ($el.hasClass('sm-scene-role')) { var s3 = smScene(mid, sid); if (s3) s3.roleName = $el.val(); }
-			else if ($el.hasClass('sm-path')) {
-				var s4 = smScene(mid, sid);
-				if (s4) {
-					s4.nextSceneIds = s4.nextSceneIds || [];
-					var tid = +$el.data('target'), k = s4.nextSceneIds.indexOf(tid);
-					if ($el.is(':checked')) { if (k < 0) s4.nextSceneIds.push(tid); }
-					else if (k >= 0) s4.nextSceneIds.splice(k, 1);
-				}
+			var sid = +$el.data('state'), idx = $el.data('idx');
+			if ($el.hasClass('sm-state-name')) { var s = smState(sid); if (s) s.name = $el.val(); }
+			else if ($el.hasClass('sm-state-desc')) { var s2 = smState(sid); if (s2) s2.desc = $el.val(); }
+			else if ($el.hasClass('sm-state-role')) { var s3 = smState(sid); if (s3) s3.roleName = $el.val(); }
+			else if ($el.hasClass('sm-link')) {
+				var s4 = smState(sid), t4 = smState(+$el.data('target'));
+				var on = $el.is(':checked');
+				if (s4) { s4.nextStateIds = s4.nextStateIds || []; var k = s4.nextStateIds.indexOf(t4 ? t4.id : -1); if (on) { if (t4 && k < 0) s4.nextStateIds.push(t4.id); } else if (k >= 0) s4.nextStateIds.splice(k, 1); }
+				if (t4) { t4.nextStateIds = t4.nextStateIds || []; var k2 = t4.nextStateIds.indexOf(sid); if (on) { if (k2 < 0) t4.nextStateIds.push(sid); } else if (k2 >= 0) t4.nextStateIds.splice(k2, 1); }
 			}
 			else if ($el.hasClass('sm-act-name') || $el.hasClass('sm-act-emote') || $el.hasClass('sm-act-cd')) {
-				var s5 = smScene(mid, sid);
+				var s5 = smState(sid);
 				if (s5 && s5.actions && s5.actions[idx]) {
 					var a = s5.actions[idx];
 					if ($el.hasClass('sm-act-name')) a.name = $el.val();
@@ -961,89 +877,71 @@
 			});
 			$('#smSaveBtn').on('click', function() { smSave(true); });
 
-			$('#smAddMoodBtn').on('click', function() {
+			$('#smAddStateBtn').on('click', function() {
 				var set = smActiveSet(); if (!set) return;
-				var name = prompt('新状态名称（第一层，如：心情很糟糕）：');
+				var name = prompt('新状态名（如：皮下 / 皮上 / 心情很糟糕）：');
 				if (!name || !name.trim()) return;
-				var id = smNextId(set.moods);
-				set.moods.push({ id: id, name: name.trim(), desc: '', scenes: [] });
-				smSelKind = 'mood'; smSelMood = id; smSelScene = 0;
-				smRender(); smSave(true);
-			});
-			$('#smAddSceneBtn').on('click', function() {
-				var set = smActiveSet(); if (!set) return;
-				var m = smMood(smSelMood) || smMood(set.moods[0] ? set.moods[0].id : 0);
-				if (!m) { showAlert('先建一个第一层状态', 'warning'); return; }
-				var name = prompt('新情景名称（第二层，如：待机 / 对话）：');
-				if (!name || !name.trim()) return;
-				var id = smNextId(m.scenes);
-				m.scenes.push({ id: id, name: name.trim(), desc: '', roleName: '', actions: [], nextSceneIds: [] });
-				smSelKind = 'scene'; smSelMood = m.id; smSelScene = id;
+				var id = smNextId(set.states);
+				set.states.push({ id: id, name: name.trim(), desc: '', roleName: '', actions: [], nextStateIds: [] });
+				smSelState = id;
 				smRender(); smSave(true);
 			});
 
 			// 表单输入 → 写回 sm + 防抖保存(图上名字实时更新,不重渲输入框以保留焦点)
-			$('#smRoot').on('input', '.sm-mood-name, .sm-mood-desc, .sm-scene-name, .sm-scene-desc, .sm-act-name, .sm-act-emote, .sm-act-cd', function() {
+			$('#smRoot').on('input', '.sm-state-name, .sm-state-desc, .sm-act-name, .sm-act-emote, .sm-act-cd', function() {
 				smApplyInput($(this)); smMarkEditing(); smDrawGraph(); smSave();
 			});
-			$('#smRoot').on('change', '.sm-scene-role, .sm-path', function() {
-				smApplyInput($(this)); smSave();
+			$('#smRoot').on('change', '.sm-state-role, .sm-link', function() {
+				smApplyInput($(this)); smDrawGraph(); smSave();
 			});
 
 			// 结构操作
 			$('#smRoot').on('click', '.sm-add-action', function() {
-				var mid = +$(this).data('mood'), sid = +$(this).data('scene');
-				var s = smScene(mid, sid); if (!s) return;
+				var sid = +$(this).data('state');
+				var s = smState(sid); if (!s) return;
 				s.actions = s.actions || [];
 				s.actions.push({ name: '', emote: '', cooldown: 30, hasPos: false, x: 0, y: 0, z: 0, yaw: 0, territoryId: 0 });
 				smRenderEditor(); smSave();
 			});
 			$('#smRoot').on('click', '.sm-del-action', function() {
-				var mid = +$(this).data('mood'), sid = +$(this).data('scene'), idx = +$(this).data('idx');
-				var s = smScene(mid, sid); if (!s || !s.actions || !s.actions[idx]) return;
+				var sid = +$(this).data('state'), idx = +$(this).data('idx');
+				var s = smState(sid); if (!s || !s.actions || !s.actions[idx]) return;
 				s.actions.splice(idx, 1); smRenderEditor(); smSave(true);
 			});
-			$('#smRoot').on('click', '.sm-del-mood', function() {
-				var id = +$(this).data('mood'); var m = smMood(id); if (!m) return;
-				if (!confirm('删除状态「' + m.name + '」及其全部情景、动作？')) return;
-				var set = smActiveSet(); if (set) set.moods = set.moods.filter(function(x) { return x.id !== id; });
-				if (smSelMood === id) { smSelKind = 'mood'; smSelMood = set && set.moods[0] ? set.moods[0].id : 0; smSelScene = 0; }
-				smRender(); smSave(true);
-			});
-			$('#smRoot').on('click', '.sm-del-scene', function() {
-				var mid = +$(this).data('mood'), sid = +$(this).data('scene');
-				var m = smMood(mid); if (!m) return;
-				var s = smScene(mid, sid); if (!s) return;
-				if (!confirm('删除情景「' + s.name + '」及其动作？')) return;
-				m.scenes = m.scenes.filter(function(x) { return x.id !== sid; });
-				(m.scenes || []).forEach(function(x) { x.nextSceneIds = (x.nextSceneIds || []).filter(function(id) { return id !== sid; }); });
-				smSelKind = 'mood'; smSelScene = 0;
+			$('#smRoot').on('click', '.sm-del-state', function() {
+				var sid = +$(this).data('state');
+				var set = smActiveSet(); if (!set) return;
+				var s = smState(sid); if (!s) return;
+				if (!confirm('删除状态「' + s.name + '」及其动作？')) return;
+				set.states = set.states.filter(function(x) { return x.id !== sid; });
+				(set.states || []).forEach(function(x) { x.nextStateIds = (x.nextStateIds || []).filter(function(id) { return id !== sid; }); });
+				smSelState = set.states[0] ? set.states[0].id : 0;
 				smRender(); smSave(true);
 			});
 
 			// 位置
 			$('#smRoot').on('click', '.sm-arm-pos', function() {
-				var mid = +$(this).data('mood'), sid = +$(this).data('scene'), idx = +$(this).data('idx');
-				var s = smScene(mid, sid); if (!s || !s.actions || !s.actions[idx]) return;
+				var sid = +$(this).data('state'), idx = +$(this).data('idx');
+				var s = smState(sid); if (!s || !s.actions || !s.actions[idx]) return;
 				var a = s.actions[idx];
 				if (!a.name || !a.name.trim()) { showAlert('先给这个动作填「名称」再记录位置', 'warning'); return; }
 				smSave(true); // 确保动作已入库,/aca pos 才能找到
 				$.ajax({
 					url: '/ArmIdlePos', type: 'POST', contentType: 'application/json',
-					data: JSON.stringify({ setId: smSelSet, moodId: mid, sceneId: sid, name: a.name.trim() }),
+					data: JSON.stringify({ setId: smSelSet, stateId: sid, name: a.name.trim() }),
 					success: function(r) { showAlert(r.message || '已准备记录位置', r.armed ? 'success' : 'warning'); },
 					error: function(x, s2, e) { showAlert('记录位置失败: ' + e, 'danger'); }
 				});
 			});
 			$('#smRoot').on('click', '.sm-clear-pos', function() {
-				var mid = +$(this).data('mood'), sid = +$(this).data('scene'), idx = +$(this).data('idx');
-				var s = smScene(mid, sid); if (!s || !s.actions || !s.actions[idx]) return;
+				var sid = +$(this).data('state'), idx = +$(this).data('idx');
+				var s = smState(sid); if (!s || !s.actions || !s.actions[idx]) return;
 				var a = s.actions[idx];
 				if (!confirm('清空「' + (a.name || '') + '」的位置？')) return;
 				a.hasPos = false; a.x = a.y = a.z = a.yaw = 0; a.territoryId = 0;
 				smRenderEditor();
 				smSave(true);
-				$.ajax({ url: '/ClearIdlePos', type: 'POST', contentType: 'application/json', data: JSON.stringify({ setId: smSelSet, moodId: mid, sceneId: sid, name: a.name || '' }) });
+				$.ajax({ url: '/ClearIdlePos', type: 'POST', contentType: 'application/json', data: JSON.stringify({ setId: smSelSet, stateId: sid, name: a.name || '' }) });
 			});
 		}
 

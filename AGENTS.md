@@ -706,3 +706,17 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
   并在末尾加硬规则:**问起在场某人的种族/性别/样子/在不在/在哪 → 直接照名单答;名单里没有的先 lookup_player;
   没数据不许猜、不许假装看(说“我瞅瞅/哦看到了”然后编)**。
 - ⚠️ 注意别再把 leave_scene 误写成 leave_season(本次改提示时手滑过一次,已修)。
+
+## 状态机坍缩成单层(2026-09-12,用户口径:情景层用不上;只留状态层,勾选的才能互通)
+- 模型:`SmSet.states`(`List<SmState>`);`SmState { id, name, desc, roleName, actions, nextStateIds }`。
+  旧 `SmMood`/`SmScene` 保留为**迁移用**类:`SmSet.LegacyMoods`(`[JsonProperty("moods")]` + `ShouldSerializeLegacyMoods()=>false`,不落盘)。
+- 迁移 `EnsureStateMachineState` → `CollapseMoodsToStates`:mood → state(id/name/desc 保留),roleName 取首个非空 scene.roleName,
+  actions 合并(按 name/emote 去重),**nextStateIds 先全部互通**(用户可再取消勾选)。
+- **互通语义**:允许切换 = 自己的 nextStateIds ∪ 别人勾了自己(双向);**空 = 切不出去**。
+  `SaveStateMachineJson` 里会清理无效/自连并把互通**规范成双向**(前端勾一边=两边通)。
+- `StateMachine`:`CurrentState`/`SwitchState`/`AllowedStates`/`DescribeStateForAi`/待机轮换/位置记录全部改成按**状态**;
+  位置武装 `ArmPos(setId, stateId, name)`。工具从 `switch_mood`+`switch_scene` 合并为 **`switch_state`**(enum=可切换的状态)。
+- 配置:`SmCurrentStateId` 新增;`SmCurrentMoodId`/`SmCurrentSceneId` 保留为旧字段(启动时 `SmCurrentStateId = SmCurrentMoodId`)。
+- 前端 `character.html`:去掉情景层;页签(多套)+ **单排状态节点图**(互通画上方虚弧线)+ 状态编辑(名称/说明/人设/勾选互通/动作)。
+  按钮 `+ 状态`;复选框 `sm-link` 勾选时**同时改两边**的 nextStateIds。
+- ⚠️ 待实机:旧配置应自动坍缩成 皮下/皮上 两个互通状态;日志 `[状态机] 状态 → X(人设: Y)`;切不过去时工具会回“没有勾选互通”。

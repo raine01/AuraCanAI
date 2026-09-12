@@ -1598,12 +1598,12 @@ public class AuraCanAiCore : IDisposable
 	}
 
 	/// <summary>当前生效的角色名:
-	///   状态机开启 → 当前第二层(情景)绑定的人设(roleName);
+	///   状态机开启 → 当前状态绑定的人设(roleName);
 	///   状态机关闭 → 旧的「当前角色」下拉(LLMConfig.currentRole),兼容旧配置。</summary>
 	public string GetActiveRoleName()
 	{
 		if (_config.StateMachineEnabled && State != null)
-			return State.CurrentSceneRole;
+			return State.CurrentStateRole;
 		return _llmSetting.currentRole ?? "";
 	}
 
@@ -1620,19 +1620,19 @@ public class AuraCanAiCore : IDisposable
 		return !string.IsNullOrEmpty(GetLLMRole(GetActiveRoleName()).setting);
 	}
 
-	/// <summary>状态机配置校准/迁移:
-	///   ① 旧单状态机(SmMoods)→ 多状态机(SmSets,一套「状态机1」);
-	///   ② 没有任何状态机 → 种默认示例(皮下/皮上,各两个情景);
-	///   ③ 唯一的旧默认(「平常」+待机/对话、无动作无人设)→ 换成新默认;
-	///   ④ 当前状态机/第一层/第二层的 id 校准到有效值。变动时落盘。
+	/// <summary>状态机配置校准/迁移(单层化):
+	///   ① 旧单状态机(SmMoods)→ SmSets;
+	///   ② 旧两层(moods[scenes])→ 单层 states(mood → state,scenes 的 role/actions 合并;迁移后默认全互通);
+	///   ③ 没有任何状态机 → 种默认示例(皮下/皮上);
+	///   ④ 当前状态机/状态的 id 校准到有效值。变动时落盘。
 	/// ⚠️ 必须在 StateMachine 构造前调用(只用 _config,不用 State)。</summary>
 	private void EnsureStateMachineState()
 	{
 		var changed = false;
-		// ① 迁移旧单状态机
+		// ① 迁移旧单状态机(存在 Configuration.SmMoods 里的第一层)
 		if (_config.SmSets.Count == 0 && _config.SmMoods.Count > 0)
 		{
-			_config.SmSets.Add(new SmSet { id = 1, name = "状态机1", moods = _config.SmMoods });
+			_config.SmSets.Add(new SmSet { id = 1, name = "状态机1", LegacyMoods = _config.SmMoods });
 			_config.SmCurrentSetId = 1;
 			_config.SmMoods = new List<SmMood>();
 			changed = true;
@@ -1640,44 +1640,59 @@ public class AuraCanAiCore : IDisposable
 		// ② 首次使用 → 默认示例
 		if (_config.SmSets.Count == 0)
 		{
-			_config.SmSets.Add(new SmSet { id = 1, name = "白屿涟音", moods = Defaults.DefaultStateMachine() });
+			_config.SmSets.Add(new SmSet { id = 1, name = "白屿涟音", states = Defaults.DefaultStateMachine() });
 			_config.SmCurrentSetId = 1;
 			changed = true;
 		}
-		// ③ 唯一的旧默认 → 换新默认
-		else if (_config.SmSets.Count == 1 && IsLegacyDefaultMoods(_config.SmSets[0].moods))
-		{
-			_config.SmSets[0].moods = Defaults.DefaultStateMachine();
-			changed = true;
-		}
-		// ③.5 旧示例套名(「默认」/「状态机1」)→「白屿涟音」(单套时)
+		// ③ 旧示例套名(「默认」/「状态机1」)→「白屿涟音」(单套时)
 		if (_config.SmSets.Count == 1 && (_config.SmSets[0].name == "默认" || _config.SmSets[0].name == "状态机1"))
 		{
 			_config.SmSets[0].name = "白屿涟音";
 			changed = true;
 		}
-		// ④ 当前状态机有效
-		foreach (var s in _config.SmSets) if (s.moods == null) s.moods = new List<SmMood>();
+		// ④ 每套:旧两层 moods[scenes] → 单层 states(两层坍缩)
+		foreach (var s in _config.SmSets)
+		{
+			if (s.states == null) s.states = new List<SmState>();
+			var legacy = s.LegacyMoods;
+			if (s.states.Count == 0 && legacy != null && legacy.Count > 0)
+			{
+				s.states = CollapseMoodsToStates(legacy);
+				changed = true;
+			}
+			s.LegacyMoods = null;
+		}
+		// ⑤ 当前状态机有效
 		var set = _config.SmSets.FirstOrDefault(s => s.id == _config.SmCurrentSetId);
 		if (set == null) { _config.SmCurrentSetId = _config.SmSets[0].id; set = _config.SmSets[0]; changed = true; }
-		// 当前第一层/第二层有效
-		var mood = set.moods.FirstOrDefault(m => m.id == _config.SmCurrentMoodId);
-		if (mood == null) { mood = set.moods.FirstOrDefault(); _config.SmCurrentMoodId = mood?.id ?? 0; changed = true; }
-		if (mood != null && mood.scenes.All(s => s.id != _config.SmCurrentSceneId))
+		// ⑥ 当前状态有效(旧配置从 SmCurrentMoodId 迁移过来;mood.id → state.id 不变)
+		if (_config.SmCurrentStateId <= 0) { _config.SmCurrentStateId = _config.SmCurrentMoodId; changed = true; }
+		if (set.states.All(s => s.id != _config.SmCurrentStateId))
 		{
-			_config.SmCurrentSceneId = mood.scenes.FirstOrDefault()?.id ?? 0;
+			_config.SmCurrentStateId = set.states.FirstOrDefault()?.id ?? 0;
 			changed = true;
 		}
 		if (changed) try { _config.Save(_pi); } catch { }
 	}
 
-	/// <summary>是否是旧默认示例(单个「平常」+ 待机/对话、无动作无人设)。</summary>
-	private static bool IsLegacyDefaultMoods(List<SmMood> moods)
+	/// <summary>旧两层(mood + scenes)坍缩成单层 states:mood → state;
+	/// 人设取第一个非空 scene.roleName;动作合并(同名去重);迁移后先全部互通(用户可再取消勾选)。</summary>
+	private static List<SmState> CollapseMoodsToStates(List<SmMood> moods)
 	{
-		if (moods.Count != 1) return false;
-		var m = moods[0];
-		if (m.name != "平常" || m.scenes.Count != 2) return false;
-		return m.scenes.All(s => s.actions.Count == 0 && string.IsNullOrEmpty(s.roleName));
+		var states = moods.Select(m => new SmState
+		{
+			id = m.id,
+			name = m.name,
+			desc = string.IsNullOrWhiteSpace(m.desc)
+				? string.Join("; ", m.scenes.Select(s => s.desc).Where(d => !string.IsNullOrWhiteSpace(d)))
+				: m.desc,
+			roleName = m.scenes.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s.roleName))?.roleName ?? "",
+			actions = m.scenes.SelectMany(s => s.actions ?? new List<IdleAction>())
+				.GroupBy(a => string.IsNullOrWhiteSpace(a.name) ? a.emote : a.name).Select(g => g.First()).ToList(),
+		}).ToList();
+		var ids = states.Select(s => s.id).ToList();
+		foreach (var s in states) s.nextStateIds = ids.Where(i => i != s.id).ToList();
+		return states;
 	}
 
 	/// <summary>重建聊天上下文(换人设/换情景/切状态后用)。</summary>
@@ -2048,7 +2063,7 @@ public class AuraCanAiCore : IDisposable
 		if (hints.Count > 0) parts.Add(BuildActionHintText(hints));
 		var sysHints = TakePendingSystemHints();
 		if (sysHints.Count > 0)
-			parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境,就用 switch_mood / switch_scene 切到合适的;否则忽略。");
+			parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境,就用 switch_state 切到合适的;否则忽略。");
 		if (parts.Count > 0)
 			msgs.Add(new Message { role = "system", content = string.Join("\n\n", parts) });
 		return msgs;
@@ -2072,7 +2087,7 @@ public class AuraCanAiCore : IDisposable
 			var actionCall = calls.FirstOrDefault(c => c.name == "rp_body_action");
 			bool hasAction = !string.IsNullOrEmpty(actionCall.name);
 			// 信息/轻动作工具(查询 或 纯转身看向):face_player 也走回填循环,让模型决定之后说/动什么
-			var infoCalls = calls.Where(c => c.name is "lookup_player" or "list_seats" or "face_player" or "rp_emote" or "leave_scene" or "switch_mood" or "switch_scene" or "rp_idle_action" or "party_action").ToList();
+			var infoCalls = calls.Where(c => c.name is "lookup_player" or "list_seats" or "face_player" or "rp_emote" or "leave_scene" or "switch_state" or "rp_idle_action" or "party_action").ToList();
 			if (hasAction && infoCalls.Count == 0)
 			{
 				// 纯动作轮:解析并执行
@@ -2128,9 +2143,9 @@ public class AuraCanAiCore : IDisposable
 					: RunInfoTool(c.name, c.args ?? "{}");
 				msgs.Add(new JObject { ["role"] = "tool", ["tool_call_id"] = c.id, ["content"] = ans });
 			}
-			// 状态切换(switch_mood/switch_scene)可能换了人设 → 同步刷新本轮的 persona system,
+			// 状态切换(switch_state)可能换了人设 → 同步刷新本轮的 persona system,
 			// 否则本轮仍按旧人设回复(用户实测:要求「上皮」后仍以皮下口吻拒绝)
-			if (infoCalls.Any(c => c.name is "switch_mood" or "switch_scene"))
+			if (infoCalls.Any(c => c.name is "switch_state"))
 			{
 				var persona = BuildPersonaSystemMessage();
 				if (persona != null && msgs.Count > 0 && msgs[0]["role"]?.ToString() == "system")
@@ -2159,7 +2174,7 @@ public class AuraCanAiCore : IDisposable
 		var hints = TakePendingActionHints(); // 对方的动作/表情:只在本轮出现一次
 		if (hints.Count > 0) parts.Add(BuildActionHintText(hints));
 		var sysHints = TakePendingSystemHints(); // 加入/退出小队等事件:只在本轮出现一次
-		if (sysHints.Count > 0) parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境/心情,用 switch_mood / switch_scene 切到合适的状态;否则忽略。");
+		if (sysHints.Count > 0) parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境/心情,用 switch_state 切到合适的状态;否则忽略。");
 		if (!string.IsNullOrWhiteSpace(extraInstruction)) parts.Add(extraInstruction);
 
 		if (parts.Count > 0)
@@ -2324,17 +2339,11 @@ public class AuraCanAiCore : IDisposable
 					try { actionName = (JObject.Parse(argsJson)["name"]?.ToString() ?? "").Trim(); } catch { }
 					return RoleActions.PerformByName(GetActiveRoleName(), actionName);
 				}
-				case "switch_mood":
+				case "switch_state":
 				{
-					var moodName = ""; var moodScene = "";
-					try { var a = JObject.Parse(argsJson); moodName = (a["mood"]?.ToString() ?? "").Trim(); moodScene = (a["scene"]?.ToString() ?? "").Trim(); } catch { }
-					return State.SwitchMood(moodName, moodScene).message;
-				}
-				case "switch_scene":
-				{
-					var sceneName = "";
-					try { sceneName = (JObject.Parse(argsJson)["scene"]?.ToString() ?? "").Trim(); } catch { }
-					return State.SwitchScene(sceneName).message;
+					var stateName = "";
+					try { stateName = (JObject.Parse(argsJson)["state"]?.ToString() ?? "").Trim(); } catch { }
+					return State.SwitchState(stateName).message;
 				}
 				case "rp_idle_action":
 				{
@@ -2510,33 +2519,22 @@ public class AuraCanAiCore : IDisposable
 				}, new[] { "name" }));
 		}
 
-		// 状态机工具(开启时):第一层自由切 / 第二层按路径切 / 指定待机动作
+		// 状态机工具(开启时):切状态(仅勾选互通的)+ 指定待机动作
 		if (_config.StateMachineEnabled && State != null)
 		{
-			var moods = (State.CurrentSet?.moods ?? new List<SmMood>()).Where(m => !string.IsNullOrWhiteSpace(m.name)).ToList();
-			if (moods.Count > 0)
+			var allowed = State.AllowedStates();
+			if (State.CurrentState != null && allowed.Count > 0)
 			{
-				tools.Add(Func("switch_mood",
-					"切换你的角色状态/身份(状态机第一层)。处境/身份/心情变了就用它(如对方要你角色扮演/上皮，或要你出戏/皮下，情绪变化…);以各状态说明为准,别人要求时不要拒绝直接切。可选 scene:同时指定该状态下用哪个情景(正在和人互动选「对话/接待」,独自待着选「待机」),一步切到位。可用状态: " + string.Join(" / ", moods.Select(m => m.name)),
-					new JObject
-					{
-						["mood"] = new JObject { ["type"] = "string", ["enum"] = new JArray(moods.Select(m => JToken.FromObject(m.name)).ToArray()) },
-						["scene"] = new JObject { ["type"] = "string", ["description"] = "可选:该状态下的情景名(如 对话/接待/待机)。正在和人互动就填对话/接待,独自待着填待机;不填=第一个情景。" },
-					}, new[] { "mood" }));
+				tools.Add(Func("switch_state",
+					"切换你的角色状态/身份(如 皮下/皮上/心情…)。处境/身份/心情变了就用它;别人要求你上皮/出戏时不要拒绝,直接切。**只能切到列出的这几个**(没勾选互通的切不过去)。如有人正在和你互动,优先切到“角色扮演/对话”类的状态。可用: " + string.Join(" / ", allowed.Select(s => s.name)),
+					new JObject { ["state"] = new JObject { ["type"] = "string", ["enum"] = new JArray(allowed.Select(s => JToken.FromObject(s.name)).ToArray()) } }, new[] { "state" }));
 			}
-			var allowed = State.AllowedScenes();
-			if (State.CurrentMood != null && allowed.Count > 0)
-			{
-				tools.Add(Func("switch_scene",
-					"切换当前的『情景模式』(状态机第二层)。只能在当前角色状态下切换,且受配置的路径限制。可用情景: " + string.Join(" / ", allowed.Select(s => s.name)),
-					new JObject { ["scene"] = new JObject { ["type"] = "string", ["enum"] = new JArray(allowed.Select(s => JToken.FromObject(s.name)).ToArray()) } }, new[] { "scene" }));
-			}
-			var curScene = State.CurrentScene;
-			if (curScene != null && curScene.actions.Count > 0)
+			var curState = State.CurrentState;
+			if (curState != null && curState.actions.Count > 0)
 			{
 				tools.Add(Func("rp_idle_action",
-					"做当前情景动作列表里的某个动作(和自动轮换的是同一批;带位置的会先走过去)。想做特定动作而不是等它自动轮换时用。可用: " + string.Join(" / ", curScene.actions.Select(a => StateMachine.DisplayName(a))),
-					new JObject { ["name"] = new JObject { ["type"] = "string", ["enum"] = new JArray(curScene.actions.Select(a => JToken.FromObject(StateMachine.DisplayName(a))).ToArray()) } }, new[] { "name" }));
+					"做当前状态动作列表里的某个动作(和自动轮换的是同一批;带位置的会先走过去)。想做特定动作而不是等它自动轮换时用。可用: " + string.Join(" / ", curState.actions.Select(a => StateMachine.DisplayName(a))),
+					new JObject { ["name"] = new JObject { ["type"] = "string", ["enum"] = new JArray(curState.actions.Select(a => JToken.FromObject(StateMachine.DisplayName(a))).ToArray()) } }, new[] { "name" }));
 			}
 		}
 
@@ -2653,8 +2651,7 @@ public class AuraCanAiCore : IDisposable
 		|| text.Contains("<parameter", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("rp_body_action", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("rp_idle_action", StringComparison.OrdinalIgnoreCase)
-		|| text.Contains("switch_mood", StringComparison.OrdinalIgnoreCase)
-		|| text.Contains("switch_scene", StringComparison.OrdinalIgnoreCase)
+		|| text.Contains("switch_state", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("party_action", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("tool_calls", StringComparison.OrdinalIgnoreCase);
 
@@ -3459,18 +3456,17 @@ public class AuraCanAiCore : IDisposable
 		return new { message = "LLM配置已重置为默认(DeepSeek Key 保留)", result = "success" };
 	}
 
-	/// <summary>把状态机重置为默认示例(单套「白屿涟音」:皮下/皮上 各两个情景)。/aca smreset</summary>
+	/// <summary>把状态机重置为默认示例(单套「白屿涟音」:皮下/皮上)。/aca smreset</summary>
 	public string ResetStateMachine()
 	{
-		_config.SmSets = new List<SmSet> { new() { id = 1, name = "白屿涟音", moods = Defaults.DefaultStateMachine() } };
+		_config.SmSets = new List<SmSet> { new() { id = 1, name = "白屿涟音", states = Defaults.DefaultStateMachine() } };
 		_config.SmCurrentSetId = 1;
-		_config.SmCurrentMoodId = _config.SmSets[0].moods[0].id;
-		_config.SmCurrentSceneId = _config.SmSets[0].moods[0].scenes[0].id;
+		_config.SmCurrentStateId = _config.SmSets[0].states[0].id;
 		SaveConfig();
 		State.ResetIdle();
 		ResetChatHistory();
 		Log("[状态机] 已重置为默认示例(单套「白屿涟音」)");
-		return "状态机已重置为默认示例:单套「白屿涟音」(皮下/皮上,各两个情景)";
+		return "状态机已重置为默认示例:单套「白屿涟音」(皮下/皮上)";
 	}
 
 	// ==================== 状态机(HTTP:前端 character.html 顶部视图) ====================
@@ -3482,17 +3478,16 @@ public class AuraCanAiCore : IDisposable
 		{
 			enabled = _config.StateMachineEnabled,
 			currentSetId = _config.SmCurrentSetId,
-			currentMoodId = _config.SmCurrentMoodId,
-			currentSceneId = _config.SmCurrentSceneId,
+			currentStateId = _config.SmCurrentStateId,
 			sets = _config.SmSets,
 			roles = _llmSetting.roles.Select(r => r.name).ToList(),
-			armed = new { setId = State.ArmedSetId, moodId = State.ArmedMoodId, sceneId = State.ArmedSceneId, name = State.ArmedActionName },
+			armed = new { setId = State.ArmedSetId, stateId = State.ArmedStateId, name = State.ArmedActionName },
 			currentRole = GetActiveRoleName(),
 			result = "success",
 		};
 	}
 
-	/// <summary>保存状态机(多套:每套的第一层/第二层/动作/路径;enabled 也一并接受)。</summary>
+	/// <summary>保存状态机(多套:每套的状态/人设/动作/互通勾选;enabled 也一并接受)。</summary>
 	public object SaveStateMachineJson(string json)
 	{
 		try
@@ -3504,41 +3499,41 @@ public class AuraCanAiCore : IDisposable
 			foreach (var set in sets)
 			{
 				if (set.id <= 0 || !setSeen.Add(set.id)) set.id = NextFreeId(setSeen);
-				if (set.moods == null) set.moods = new List<SmMood>();
-				set.moods.RemoveAll(m => m == null || string.IsNullOrWhiteSpace(m.name));
-				var mseen = new HashSet<int>();
-				foreach (var m in set.moods)
+				if (set.states == null) set.states = new List<SmState>();
+				set.LegacyMoods = null; // 不再保存旧两层字段
+				set.states.RemoveAll(m => m == null || string.IsNullOrWhiteSpace(m.name));
+				var seen = new HashSet<int>();
+				foreach (var st in set.states)
 				{
-					if (m.id <= 0 || !mseen.Add(m.id)) m.id = NextFreeId(mseen);
-					if (m.scenes == null) m.scenes = new List<SmScene>();
-					m.scenes.RemoveAll(s => s == null || string.IsNullOrWhiteSpace(s.name));
-					var sseen = new HashSet<int>();
-					foreach (var s in m.scenes)
-					{
-						if (s.id <= 0 || !sseen.Add(s.id)) s.id = NextFreeId(sseen);
-						if (s.actions == null) s.actions = new List<IdleAction>();
-						s.actions.RemoveAll(a => a == null || (string.IsNullOrWhiteSpace(a.name) && string.IsNullOrWhiteSpace(a.emote)));
-						if (s.nextSceneIds == null) s.nextSceneIds = new List<int>();
-					}
-					foreach (var s in m.scenes) s.nextSceneIds.RemoveAll(id => m.scenes.All(x => x.id != id));
+					if (st.id <= 0 || !seen.Add(st.id)) st.id = NextFreeId(seen);
+					if (st.actions == null) st.actions = new List<IdleAction>();
+					st.actions.RemoveAll(a => a == null || (string.IsNullOrWhiteSpace(a.name) && string.IsNullOrWhiteSpace(a.emote)));
+					if (st.nextStateIds == null) st.nextStateIds = new List<int>();
 				}
+				// 只保留有效 id、去自连,并把「互通」做成双向(前端勾一边=两边通)
+				var ids = set.states.Select(s => s.id).ToHashSet();
+				foreach (var st in set.states)
+					st.nextStateIds = st.nextStateIds.Where(i => ids.Contains(i) && i != st.id).Distinct().ToList();
+				foreach (var st in set.states)
+					foreach (var other in set.states)
+						if (other.nextStateIds.Contains(st.id)) st.nextStateIds.Add(other.id);
+				foreach (var st in set.states)
+					st.nextStateIds = st.nextStateIds.Where(i => i != st.id).Distinct().ToList();
 			}
-			if (sets.Count == 0) sets.Add(new SmSet { id = 1, name = "白屿涟音", moods = new List<SmMood>() });
+			if (sets.Count == 0) sets.Add(new SmSet { id = 1, name = "白屿涟音", states = new List<SmState>() });
 			_config.SmSets = sets;
 			if (parsed["enabled"] != null) _config.StateMachineEnabled = parsed["enabled"]!.Value<bool>();
 			if (parsed["currentSetId"] != null && _config.SmSets.Any(s => s.id == parsed["currentSetId"]!.Value<int>()))
 				_config.SmCurrentSetId = parsed["currentSetId"]!.Value<int>();
-			// 校准当前状态机/第一层/第二层
+			// 校准当前状态机/状态
 			var set2 = _config.SmSets.FirstOrDefault(s => s.id == _config.SmCurrentSetId) ?? _config.SmSets[0];
 			_config.SmCurrentSetId = set2.id;
-			var mood = set2.moods.FirstOrDefault(m => m.id == _config.SmCurrentMoodId) ?? set2.moods.FirstOrDefault();
-			_config.SmCurrentMoodId = mood?.id ?? 0;
-			var scene = mood?.scenes.FirstOrDefault(s => s.id == _config.SmCurrentSceneId) ?? mood?.scenes.FirstOrDefault();
-			_config.SmCurrentSceneId = scene?.id ?? 0;
+			var st2 = set2.states.FirstOrDefault(m => m.id == _config.SmCurrentStateId) ?? set2.states.FirstOrDefault();
+			_config.SmCurrentStateId = st2?.id ?? 0;
 			SaveConfig();
 			State.ResetIdle();
 			ResetChatHistory();
-			Log($"[状态机] 已保存:{_config.SmSets.Count} 套;当前「{set2.name}」 {State.CurrentMoodName}/{State.CurrentSceneName}");
+			Log($"[状态机] 已保存:{_config.SmSets.Count} 套;当前「{set2.name}」 {State.CurrentStateName}");
 			return new { message = "状态机已保存", result = "success" };
 		}
 		catch (Exception e) { return new { message = e.Message, result = "error" }; }
@@ -3552,7 +3547,7 @@ public class AuraCanAiCore : IDisposable
 		return id;
 	}
 
-	/// <summary>切换当前状态机(前端页签;也是运行时用的那套):切到该套的第一个第一层/第二层,重置待机与上下文。</summary>
+	/// <summary>切换当前状态机(前端页签;也是运行时用的那套):切到该套第一个状态,重置待机与上下文。</summary>
 	public object SetCurrentStateMachineJson(string json)
 	{
 		try
@@ -3562,15 +3557,13 @@ public class AuraCanAiCore : IDisposable
 			{
 				_config.SmCurrentSetId = id;
 				var set = _config.SmSets.First(s => s.id == id);
-				var mood = set.moods.FirstOrDefault();
-				_config.SmCurrentMoodId = mood?.id ?? 0;
-				_config.SmCurrentSceneId = mood?.scenes.FirstOrDefault()?.id ?? 0;
+				_config.SmCurrentStateId = set.states.FirstOrDefault()?.id ?? 0;
 				SaveConfig();
 				State.ResetIdle();
 				ResetChatHistory();
-				Log($"[状态机] 当前状态机 → 「{set.name}」({State.CurrentMoodName}/{State.CurrentSceneName})");
+				Log($"[状态机] 当前状态机 → 「{set.name}」({State.CurrentStateName})");
 			}
-			return new { currentSetId = _config.SmCurrentSetId, currentMoodId = _config.SmCurrentMoodId, currentSceneId = _config.SmCurrentSceneId, currentRole = GetActiveRoleName(), result = "success" };
+			return new { currentSetId = _config.SmCurrentSetId, currentStateId = _config.SmCurrentStateId, currentRole = GetActiveRoleName(), result = "success" };
 		}
 		catch (Exception e) { return new { message = e.Message, result = "error" }; }
 	}
@@ -3592,18 +3585,16 @@ public class AuraCanAiCore : IDisposable
 		catch (Exception e) { return new { message = e.Message, result = "error" }; }
 	}
 
-	/// <summary>前端手动切换当前状态(第一层/第二层;调试/手动微调用)。</summary>
+	/// <summary>前端手动切换当前状态(调试/手动微调用)。</summary>
 	public object SwitchStateMachineJson(string json)
 	{
 		try
 		{
 			var p = JObject.Parse(json);
-			var moodName = p["mood"]?.ToString() ?? "";
-			var sceneName = p["scene"]?.ToString() ?? "";
+			var stateName = p["state"]?.ToString() ?? "";
 			var msg = "";
-			if (!string.IsNullOrWhiteSpace(moodName)) { var r = State.SwitchMood(moodName); if (!r.ok) return new { message = r.message, result = "error" }; msg += r.message + " "; }
-			if (!string.IsNullOrWhiteSpace(sceneName)) { var r = State.SwitchScene(sceneName); if (!r.ok) return new { message = r.message, result = "error" }; msg += r.message; }
-			return new { message = msg.Trim(), result = "success", currentMood = State.CurrentMoodName, currentScene = State.CurrentSceneName, currentRole = GetActiveRoleName() };
+			if (!string.IsNullOrWhiteSpace(stateName)) { var r = State.SwitchState(stateName); if (!r.ok) return new { message = r.message, result = "error" }; msg += r.message; }
+			return new { message = msg.Trim(), result = "success", currentState = State.CurrentStateName, currentRole = GetActiveRoleName() };
 		}
 		catch (Exception e) { return new { message = e.Message, result = "error" }; }
 	}
@@ -3614,7 +3605,7 @@ public class AuraCanAiCore : IDisposable
 		try
 		{
 			var p = JObject.Parse(json);
-			State.ArmPos(p["setId"]?.Value<int>() ?? 0, p["moodId"]?.Value<int>() ?? 0, p["sceneId"]?.Value<int>() ?? 0, p["name"]?.ToString() ?? "");
+			State.ArmPos(p["setId"]?.Value<int>() ?? 0, p["stateId"]?.Value<int>() ?? 0, p["name"]?.ToString() ?? "");
 			var armed = State.ArmedActionName.Length > 0;
 			return new { armed, name = State.ArmedActionName, message = armed ? "已准备记录位置:请到游戏里站好,输入 /aca pos" : "已取消记录位置", result = "success" };
 		}
@@ -3627,7 +3618,7 @@ public class AuraCanAiCore : IDisposable
 		try
 		{
 			var p = JObject.Parse(json);
-			var msg = State.ClearPosition(p["setId"]?.Value<int>() ?? 0, p["moodId"]?.Value<int>() ?? 0, p["sceneId"]?.Value<int>() ?? 0, p["name"]?.ToString() ?? "");
+			var msg = State.ClearPosition(p["setId"]?.Value<int>() ?? 0, p["stateId"]?.Value<int>() ?? 0, p["name"]?.ToString() ?? "");
 			return new { message = msg, result = "success" };
 		}
 		catch (Exception e) { return new { message = e.Message, result = "error" }; }
@@ -3640,10 +3631,9 @@ public class AuraCanAiCore : IDisposable
 		_llmSetting = Defaults.DefaultLlmConfig();
 		SyncApiKeyFromConfig(); // Key 保留
 		_config.SetLlmConfig(StripKey(_llmSetting));
-		_config.SmSets = new List<SmSet> { new() { id = 1, name = "白屿涟音", moods = Defaults.DefaultStateMachine() } };
+		_config.SmSets = new List<SmSet> { new() { id = 1, name = "白屿涟音", states = Defaults.DefaultStateMachine() } };
 		_config.SmCurrentSetId = 1;
-		_config.SmCurrentMoodId = _config.SmSets[0].moods[0].id;
-		_config.SmCurrentSceneId = _config.SmSets[0].moods[0].scenes[0].id;
+		_config.SmCurrentStateId = _config.SmSets[0].states[0].id;
 		_config.Save(_pi);
 		RoleActions?.Reset();
 		State?.ResetIdle();

@@ -80,39 +80,33 @@ public class RoleAction
 	public int cooldown { get; set; } = 0; // 冷却:单位秒(0 = 不限制)
 }
 
-// ==================== 状态机(两层:第一层角色状态 / 第二层情景) ====================
+// ==================== 状态机(单层:角色状态;勾选的才能互通) ====================
 
-/// <summary>状态机(可以有多套;前端以页签切换,像场景设定的「房子」)。每套内含自己的第一层/第二层。</summary>
+/// <summary>状态机(可以有多套;前端以页签切换,像场景设定的「房子」)。每套内是自己的状态列表。</summary>
 public class SmSet
 {
 	public int id { get; set; }
-	public string name { get; set; } = ""; // 显示名(如 默认 / 白屿涟音 / 战斗)
-	public List<SmMood> moods { get; set; } = new(); // 该套的第一层列表
+	public string name { get; set; } = ""; // 显示名(如 皮下 / 白屿涟音 / 战斗)
+	public List<SmState> states { get; set; } = new(); // 状态列表(单层)
+
+	/// <summary>⚠️ 旧版两层的 moods(仅用于启动时迁移到 states);不序列化。</summary>
+	[JsonProperty("moods")] public List<SmMood>? LegacyMoods { get; set; }
+	public bool ShouldSerializeLegacyMoods() => false;
 }
 
-/// <summary>状态机第一层:角色状态/心情(如 心情很糟糕 / 非常开心 / 亢奋 / 受伤中)。
-/// 不同第一层对应不同的第二层情景,角色只能在当前第一层下的几个情景之间切换。第一层由 AI 自由判断切换。</summary>
-public class SmMood
+/// <summary>角色状态(单层状态机的一个节点)。
+/// roleName = 该状态用的人设;actions = 待机动作;nextStateIds = 允许切换到的状态(勾选的才能互通;空 = 不能切到别的状态)。</summary>
+public class SmState
 {
 	public int id { get; set; }
-	public string name { get; set; } = ""; // 显示名(心情很糟糕 / 非常开心 / 亢奋 / 受伤中)
+	public string name { get; set; } = ""; // 显示名(皮下 / 皮上 / 心情很糟糕 …)
 	public string desc { get; set; } = ""; // 给 AI 的说明:什么时候该处于这个状态
-	public List<SmScene> scenes { get; set; } = new(); // 该状态下的情景(第二层)
+	public string roleName { get; set; } = ""; // 该状态使用的人设(角色设定里的角色名;空 = 不演角色,照常聊天)
+	public List<IdleAction> actions { get; set; } = new(); // 待机动作列表(名称/动作/冷却/位置)
+	public List<int> nextStateIds { get; set; } = new(); // 允许切换到的状态(互通:存双向)
 }
 
-/// <summary>状态机第二层:情景模式(待机 / 对话 …)。每个情景绑定一个人设 roleName,并有自己的动作列表。
-/// 切换受路径 nextSceneIds 约束(空 = 同第一层内不限)。</summary>
-public class SmScene
-{
-	public int id { get; set; }
-	public string name { get; set; } = "";
-	public string desc { get; set; } = ""; // 给 AI 的说明
-	public string roleName { get; set; } = ""; // 该情景使用的人设(角色设定里的角色名;空 = 不说话)
-	public List<IdleAction> actions { get; set; } = new(); // 动作列表(名称/动作/冷却/位置)
-	public List<int> nextSceneIds { get; set; } = new(); // 允许切换到同第一层下的哪些情景(空 = 不限)
-}
-
-/// <summary>状态机第二层的动作(待机动作列表):名称 / 动作(游戏表情名) / 冷却(秒,也是自动轮换间隔) / 位置(可空)。
+/// <summary>待机动作(每个状态一份):名称 / 动作(游戏表情名) / 冷却(秒,也是自动轮换间隔) / 位置(可空)。
 /// 与 RoleAction 的区别:没有「文字」项,多一个「位置」项(可在游戏内用 /aca pos 导入)。</summary>
 public class IdleAction
 {
@@ -125,6 +119,28 @@ public class IdleAction
 	public float z { get; set; }
 	public float yaw { get; set; } // 面向(弧度,0=南)
 	public uint territoryId { get; set; } // 记录位置时所在地区(跨屋防错位)
+}
+
+// ===== 旧版两层模型(仅用于启动迁移;新代码不再使用) =====
+
+/// <summary>[旧] 第一层:角色状态。</summary>
+public class SmMood
+{
+	public int id { get; set; }
+	public string name { get; set; } = "";
+	public string desc { get; set; } = "";
+	public List<SmScene> scenes { get; set; } = new();
+}
+
+/// <summary>[旧] 第二层:情景。</summary>
+public class SmScene
+{
+	public int id { get; set; }
+	public string name { get; set; } = "";
+	public string desc { get; set; } = "";
+	public string roleName { get; set; } = "";
+	public List<IdleAction> actions { get; set; } = new();
+	public List<int> nextSceneIds { get; set; } = new();
 }
 
 /// <summary>DeepSeek 请求体</summary>
