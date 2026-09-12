@@ -734,3 +734,11 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
     **空列表 = 该状态禁用了全部工具**)。
   - `GetStateMachineJson` 返回 `toolCatalog` 供前端渲染;状态编辑面板加「工具集」勾选行(`sm-tool`)。
 - ⚠️ 注意:`switch_state` 也在工具集里,若某个状态把工具全取消,AI 在该状态下就切不出去(用户可自行取舍)。
+
+## switch_state 与提示词只暴露“通路”(2026-09-12)
+- `switch_state` 本来就在 `AiToolCatalog` 里、新建/迁移状态默认全勾选。
+- **提示词改为只列通路**:`DescribeStateForAi` 不再列出“全部状态及人设”,只列
+  「当前状态 + 能切换到的状态(每个后面写切过去后的人设)」;没有通路时**整段切换指引都不出现**(参数里也没有 switch_state 工具)。
+- 新增参数 `DescribeStateForAi(bool switchToolEnabled = true)`:调用处传 `ToolEnabled(AiToolCatalog.SwitchState)`,
+  这样用户在工具集里取消了 `switch_state` 时,提示词也不再提切换(与实际可用工具一致)。
+- ⚠️ 记住:工具枚举(enum)与提示词都必须与实际勾选一致,否则模型会去调不存在的工具。

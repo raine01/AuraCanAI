@@ -2962,7 +2962,7 @@ public class AuraCanAiCore : IDisposable
 				sb.Append("(刚结束的移动:").Append(_lastMoveResult).Append(")");
 			sb.Append("要确认某人/自己距离用 lookup_player(不带名字=列在场玩家,含种族/性别/在线状态/在你哪边);想坐哪可 list_seats(可传 near=某人看其旁座位);移动/坐下用 rp_body_action(approach/follow/leave/face/sit/stop);想告辞/结束互动/退到一边时用 leave_scene(会走到人少的地方,60 秒没人说话自动退小队);对谁说话/回应谁时可用 face_player 转身看向对方(多人时尤其适用);坐某人旁边 = sit 且 target 填那个玩家名(自动找其最近空座)或按 list_seats 的距离挑 #id;对方让你坐 TA 的**左边/右边**时,先 list_seats(near=那人) 看每个座在 TA 面朝的哪一侧(左/右/前/后),再挑对应座位名/#id 坐。距离永远以当前情况为准——对方可能已走开,别以为还在原位。动作绝不写进台词。已列出的在场者不必重复 lookup_player(除非要看职业等细节或确认是否还在);没变化就别反复查。⚠️ 问起在场某人的种族/性别/样子/在不在/在哪,直接照上面在场名单(名字后面括号里就是)回答;名单里没有的人先用 lookup_player 查。**没有数据就不要凭空猜,也不要假装看(说“我瞅瞅”“哦看到了”然后编)——要么用名单,要么调工具,要么就实话说不认识/没看清。**");
 			// 状态机:当前状态/情景/人设/动作/可切换路径(开启时)
-			var stateDesc = State?.DescribeStateForAi() ?? "";
+			var stateDesc = State?.DescribeStateForAi(ToolEnabled(AiToolCatalog.SwitchState)) ?? "";
 			if (stateDesc.Length > 0) sb.Append('\n').Append(stateDesc);
 		}
 		catch (Exception e)
