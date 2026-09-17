@@ -67,7 +67,9 @@ $pm = [regex]::Replace($pm, '"LastUpdate"\s*:\s*\d+',                   '"LastUp
 
 # 校验是合法 JSON
 try { $null = $pm | ConvertFrom-Json } catch { Fail "pluginmaster.json 生成了非法 JSON: $_" }
-Set-Content -Path $pmPath -Value $pm -Encoding UTF8 -NoNewline
+# 必须写成无 BOM 的 UTF-8:带 BOM 的 JSON 会让卫月解析报 Unexpected character
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($pmPath, $pm, $utf8NoBom)
 Info "pluginmaster.json 已同步(AssemblyVersion=$version, LastUpdate=$now)"
 
 # ---------- 4. 发布 ----------
