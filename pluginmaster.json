@@ -1,0 +1,36 @@
+﻿[
+  {
+    "Author": "ThousanRaine",
+    "Name": "AuraCanAI",
+    "InternalName": "AuraCanAI.Dalamud",
+    "AssemblyVersion": "0.1.0.0",
+    "Description": "AuraCanAI 鍗湀鎻掍欢鐗?娓告垙鍐?AI 瑙掕壊鎵紨鍔╂墜銆傛彁渚涙湰鍦扮綉椤垫帶鍒跺彴(localhost:8051),鏀寔 DeepSeek 澶фā鍨嬭鑹叉壆婕斻€佽亰澶╄闊虫彁绀?TTS)銆佺帺瀹惰繘鍑?娉ㄨ鎻愰啋銆佽亰澶╄褰曞綊妗ｄ笌鍏ㄦ枃妫€绱€佺帺瀹跺娉ㄣ€侀檮杩戠帺瀹朵笌娲荤偣鍦板浘銆佽涓鸿缃€丮IDI 婕斿涓庡弻寮€鍚堝銆佺Щ鍔ㄥ唴鏍搞€傛寚浠?/aca",
+    "ApplicableVersion": "any",
+    "Tags": [
+      "AuraCan",
+      "AI",
+      "TTS",
+      "RolePlay",
+      "ChatLog"
+    ],
+    "CategoryTags": [
+      "Utility",
+      "Other"
+    ],
+    "DalamudApiLevel": 15,
+    "RepoUrl": "https://github.com/raine01/AuraCanAI",
+    "Punchline": "娓告垙鍐?AI 瑙掕壊鎵紨鍔╂墜:鏈湴缃戦〉鎺у埗鍙?+ LLM + TTS + 鑱婂ぉ璁板綍",
+    "LoadRequiredState": 0,
+    "LoadSync": false,
+    "CanUnloadAsync": false,
+    "LoadPriority": 0,
+    "AcceptsFeedback": true,
+    "IsHide": false,
+    "IsTestingExclusive": false,
+    "DownloadLinkInstall": "https://github.com/raine01/AuraCanAI/releases/latest/download/latest.zip",
+    "DownloadLinkUpdate": "https://github.com/raine01/AuraCanAI/releases/latest/download/latest.zip",
+    "DownloadLinkTesting": "https://github.com/raine01/AuraCanAI/releases/latest/download/latest.zip",
+    "IconUrl": "https://raw.githubusercontent.com/raine01/AuraCanAI/main/images/icon.png",
+    "LastUpdate": 1789646407
+  }
+]

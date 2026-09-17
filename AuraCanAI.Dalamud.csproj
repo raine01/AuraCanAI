@@ -2,7 +2,7 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
     <Version>0.1.0.0</Version>
-    <PackageProjectUrl>https://github.com/raine01/ff14AuraCan</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/raine01/AuraCanAI</PackageProjectUrl>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
