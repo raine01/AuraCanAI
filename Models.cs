@@ -124,7 +124,7 @@ public static class AiToolCatalog
 		(FacePlayer, "转身看向某人"),
 		(LookupPlayer, "查看在场玩家（谁在场/谁在看你）"),
 		(RoleEmote, "做角色自定义动作"),
-		(LeaveParty, "主动退出小队"),
+		(LeaveParty, "主动退出小队（可选退队后走开）"),
 		(LeaveScene, "离开场地（退到人少处）"),
 	};
 

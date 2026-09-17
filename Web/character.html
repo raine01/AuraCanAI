@@ -800,7 +800,7 @@
 						<select class="form-control form-control-sm sm-state-role" data-state="${s.id}">${smRoleOpts(s.roleName)}</select>
 					</div>
 					<div class="col-md-3">
-						<input type="text" class="form-control form-control-sm sm-state-desc" data-state="${s.id}" value="${escAttr(s.desc || '')}" placeholder="给 AI 的说明（什么时候在这个状态）">
+						<input type="text" class="form-control form-control-sm sm-state-desc" data-state="${s.id}" value="${escAttr(s.desc || '')}" placeholder="换到它的情形（什么时候该处于这个状态，AI 据此自己换过来）">
 					</div>
 					<div class="col-md-3 text-right">
 						<button type="button" class="btn btn-sm btn-outline-danger sm-del-state" data-state="${s.id}">删除</button>

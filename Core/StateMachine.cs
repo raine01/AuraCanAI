@@ -46,20 +46,20 @@ public sealed class StateMachine
 	public (bool ok, string message) SwitchState(string key)
 	{
 		var set = CurrentSet;
-		if (set == null || set.states.Count == 0) return (false, "当前状态机还没有配置状态");
+		if (set == null || set.states.Count == 0) return (false, "现在没有可用的身份");
 		var s = Match(set.states, key, x => x.name);
-		if (s == null) return (false, $"没有叫「{key}」的状态;可用: {Names(set.states, x => x.name)}");
+		if (s == null) return (false, $"没有叫「{key}」的身份;能换成的是: {Names(set.states, x => x.name)}");
 		var cur = CurrentState;
-		if (cur != null && cur.id == s.id) return (true, $"已经处于「{s.name}」状态");
+		if (cur != null && cur.id == s.id) return (true, $"你现在已经是「{s.name}」了");
 		var allowed = AllowedStates();
 		if (cur != null && !allowed.Any(x => x.id == s.id))
-			return (false, $"从「{cur.name}」不能切到「{s.name}」(没有通路);当前只能切到: {(allowed.Count > 0 ? Names(allowed, x => x.name) : "没有可切换的状态")}");
+			return (false, $"你现在是「{cur.name}」,换不到「{s.name}」;能换成的是: {(allowed.Count > 0 ? Names(allowed, x => x.name) : "没有能换成的身份")}");
 		_config.SmCurrentStateId = s.id;
 		var role = string.IsNullOrEmpty(s.roleName) ? "(未设置人设,不演角色照常聊天)" : s.roleName;
 		_core.SaveConfig();
 		_core.ResetChatHistoryPublic(); // 换了状态换了人设 → 重建 system 提示
 		Plugin.Log?.Information($"[状态机] 状态 → {s.name}(人设: {role})");
-		return (true, $"已切换到「{s.name}」(人设: {role})");
+		return (true, $"已换成「{s.name}」,接下来按人设「{role}」说话");
 	}
 
 	/// <summary>强制设置为当前状态(不检查通路;供“闲置回到默认状态”等程序内部使用)。
@@ -95,19 +95,38 @@ public sealed class StateMachine
 		var allowed = switchToolEnabled ? AllowedStates() : new List<SmState>();
 		if (allowed.Count > 0)
 		{
-			sb.Append("- 需要时可以换个身份(比如对方要你进入角色/上皮,或要你出戏/皮下,又或者你自己的心思、处境变了)。用 switch_identity 换,能换成的只有这几个:\n");
-			foreach (var st in allowed)
-			{
-				var role = string.IsNullOrEmpty(st.roleName) ? "不演角色" : st.roleName;
-				sb.Append($"  · {st.name}" + (string.IsNullOrWhiteSpace(st.desc) ? "" : $"({st.desc})") + $" —— 换过去后你是「{role}」\n");
-			}
-			sb.Append("- 别人要求你换个身份时,不要拒绝、不要解释、也不要反问,直接换过去,再用新的口吻说话。\n");
-			sb.Append("- 但**别频繁来回换**:对方没要求、处境也没变,就保持现在的身份;一轮最多换一次。\n");
+			// ⚠️ 泛用口径(2026-09-12):**不写死任何具体身份/例子**(不能假设只有 皮下/皮上/被当成AI)。
+			// 「什么时候换」一律由用户给每个状态写的 desc 决定:desc 就是触发条件。用户新建任意状态机都照此工作。
+			sb.Append("- 你可以换身份(用 switch_identity):判断标准是下面每个身份写的「换到它的情形」——**只要出现了某一条,就直接换过去**;不需要对方开口要求、不用等谁批准、也不是只有对方点名才能换。\n");
+			sb.Append(DescribeSwitchCandidates());
+			sb.Append("- 对方直接点名叫你换身份时,不要拒绝、不要解释、不要反问,直接换过去。\n");
+			sb.Append("- 换身份必须**真的调用 switch_identity**;只回一句“我换上了 / 我不装了 / 好我出戏”这种嘴上表态不算换(有没有换看程序、不看台词)。\n");
+			sb.Append("- 别来回换:**一轮最多换一次**;没有任何一条情形成立,就保持现在的身份。\n");
 			sb.Append("- 只能换成上面列出的那几个;换不了就保持原样,不要说“我换好了”。\n");
 		}
 		sb.Append("动作绝不写进台词。");
 		return sb.ToString();
 	}
+
+	/// <summary>可切换身份一览(泛用:内容全部来自用户配置,与状态机具体含义无关)。
+	/// 供“注入提示词”与“switch_identity 工具描述”**共用**,避免两处口径漂移。
+	/// 每行:`· 名字 —— 换到它的情形:&lt;desc&gt;;换过去后按人设「X」说话`。</summary>
+	public string DescribeSwitchCandidates(string linePrefix = "  · ")
+	{
+		var sb = new StringBuilder();
+		foreach (var st in AllowedStates())
+		{
+			var role = string.IsNullOrEmpty(st.roleName) ? "不演角色,照常聊天" : st.roleName;
+			var trigger = string.IsNullOrWhiteSpace(st.desc) ? "(这个状态没写情形;对方点名要它时换)" : st.desc;
+			sb.Append(linePrefix).Append(st.name).Append(" —— 换到它的情形:").Append(trigger)
+			  .Append(";换过去后按人设「").Append(role).Append("」说话\n");
+		}
+		return sb.ToString();
+	}
+
+	/// <summary>可切换身份一览的单行版(工具描述用;条目间用 “ ; ” 隔开)。</summary>
+	public string DescribeSwitchCandidatesInline()
+		=> DescribeSwitchCandidates("").Replace("\r", " ").Replace("\n", " ; ").Trim().TrimEnd(';', ' ').Trim();
 
 	// ==================== 工具 ====================
 

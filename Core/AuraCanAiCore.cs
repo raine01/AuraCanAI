@@ -2082,7 +2082,7 @@ public class AuraCanAiCore : IDisposable
 		if (hints.Count > 0) parts.Add(BuildActionHintText(hints));
 		var sysHints = TakePendingSystemHints();
 		if (sysHints.Count > 0)
-			parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境,就用 switch_identity 换到合适身份;否则忽略。");
+			parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事让你落进了上面身份说明里写的某种情形,就用 switch_identity 换过去;否则忽略。");
 		if (parts.Count > 0)
 			msgs.Add(new Message { role = "system", content = string.Join("\n\n", parts) });
 		return msgs;
@@ -2193,7 +2193,7 @@ public class AuraCanAiCore : IDisposable
 		var hints = TakePendingActionHints(); // 对方的动作/表情:只在本轮出现一次
 		if (hints.Count > 0) parts.Add(BuildActionHintText(hints));
 		var sysHints = TakePendingSystemHints(); // 加入/退出小队等事件:只在本轮出现一次
-		if (sysHints.Count > 0) parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事改变了你的处境,就用 switch_identity 换到合适身份;否则忽略。");
+		if (sysHints.Count > 0) parts.Add("## 事件提醒(本轮)\n" + string.Join("\n", sysHints) + "\n处理方式:如果这件事让你落进了上面身份说明里写的某种情形,就用 switch_identity 换过去;否则忽略。");
 		if (!string.IsNullOrWhiteSpace(extraInstruction)) parts.Add(extraInstruction);
 
 		if (parts.Count > 0)
@@ -2366,7 +2366,14 @@ public class AuraCanAiCore : IDisposable
 				}
 				case "leave_party":
 				{
-					return PartyAction("leave", "");
+					var walkAway = false;
+					try { walkAway = JObject.Parse(argsJson)["walk_away"]?.Value<bool?>() ?? false; } catch { }
+					var leaveMsg = PartyAction("leave", "");
+					// 退队后不再盯着人:先移开目光(清游戏目标 + 软目标,角色就不会再面向他)
+					ClearLook();
+					if (!walkAway) return $"{leaveMsg};已移开目光(不再看着人)";
+					// walk_away=true:退完队再真的走开(走远一点 + 找个周围人少的位置坐下)
+					return $"{leaveMsg};{WalkAwayAndSit()}";
 				}
 				case "lookup_player":
 				{
@@ -2425,23 +2432,8 @@ public class AuraCanAiCore : IDisposable
 		}
 	}
 
-	/// <summary>本地玩家的“种族+性别”(如 敖龙族女);取不到返回空串。</summary>
-	private string SelfRaceGender()
-	{
-		try
-		{
-			if (_objectTable.LocalPlayer is IPlayerCharacter me)
-			{
-				var race = GetRaceName(me.Customize.Length > 0 ? me.Customize[0] : (byte)0);
-				var gender = me.Customize.Length > 1 && me.Customize[1] == 1 ? "女" : "男";
-				return race + gender;
-			}
-		}
-		catch { }
-		return "";
-	}
-
-	/// <summary>自身信息(供 lookup_player 回答“你是谁/你什么种族”):名字/种族/性别/在线状态/当前动作。需框架线程。</summary>
+	/// <summary>自身信息(供 lookup_player 回答“你是谁”):名字/在线状态/当前动作。需框架线程。
+	/// ⚠️ 不带种族/性别(2026-09-12 用户口径:模型会把“敖龙族女”当成“我是谁”来答,破「皮下=屏幕后真人」的人设)。</summary>
 	private string BuildSelfInfo()
 	{
 		try
@@ -2449,14 +2441,8 @@ public class AuraCanAiCore : IDisposable
 			var local = _objectTable.LocalPlayer;
 			if (local == null) return "";
 			var name = GetCleanName(local.Name.TextValue);
-			var race = ""; var gender = "";
-			if (local is IPlayerCharacter me)
-			{
-				race = GetRaceName(me.Customize.Length > 0 ? me.Customize[0] : (byte)0);
-				gender = me.Customize.Length > 1 && me.Customize[1] == 1 ? "女" : "男";
-			}
 			var status = GetOnlineStatusName(local.OnlineStatus.RowId);
-			return $"你自己:{name}({race}{gender}{(string.IsNullOrEmpty(status) ? "" : "," + status)}),{Movement.StatusText()}";
+			return $"你自己:{name}({(string.IsNullOrEmpty(status) ? "" : status + ",")}{Movement.StatusText()})";
 		}
 		catch { return ""; }
 	}
@@ -2532,16 +2518,25 @@ public class AuraCanAiCore : IDisposable
 			var allowed = State.AllowedStates();
 			if (State.CurrentState != null && allowed.Count > 0)
 			{
+				// ⚠️ 泛用口径(2026-09-12):触发条件从状态配置的 desc 生成,不写死任何具体身份/例子(与注入提示词共用同一份文案)。
 				tools.Add(Func(AiToolCatalog.SwitchIdentity,
-					"换一个身份。当对方要你进入角色（上皮）、或要你出戏（皮下）、或你自己的心思/处境变了的时候用。只能换成下面列出的这几个。可选身份: " + string.Join(" / ", allowed.Select(s => s.name)),
+					"换一个身份(换成另一套说话身份/人设)。当下面某个身份写的“换到它的情形”出现时就直接换过去——不需要对方开口要求,也不要只在台词里承认。可选身份: " + State.DescribeSwitchCandidatesInline(),
 					new JObject { ["identity"] = new JObject { ["type"] = "string", ["enum"] = new JArray(allowed.Select(s => JToken.FromObject(s.name)).ToArray()) } }, new[] { "identity" }));
 			}
 		}
 
-		// 主动离开小队(只保留这一个作用;邀请/接受由程序或命令处理)
+		// 主动离开小队(邀请/接受由程序或命令处理)。可选参数 walk_away=是否要离开(真的走开)
+		// 每次调用都会先移开目光(不再盯着对方),再视 walk_away 决定要不要走远坐下。
 		tools.Add(Func(AiToolCatalog.LeaveParty,
-			"主动退出当前小队(不想跟着队伍了、想一个人待着时用)。不需要参数。",
-			new JObject(), Array.Empty<string>()));
+			"主动退出当前小队(不想跟着队伍了、想一个人待着时用)。调用后会自动**移开目光**(不再看着对方)。可选参数 walk_away:填 true 表示退完队还要**真的走开**——走远一点、找个周围人少的位置坐下;不填/填 false 只退队,人留在原地。",
+			new JObject
+			{
+				["walk_away"] = new JObject
+				{
+					["type"] = "boolean",
+					["description"] = "是否要离开(退队后真的走开)。true=走远一点、找个人少的位置坐下;不填/false=只退队,原地不动(都会移开目光)"
+				}
+			}, Array.Empty<string>()));
 		// 按当前状态勾选的工具集过滤(状态机开启时;该状态 tools 为空 = 全开)
 		for (var i = tools.Count - 1; i >= 0; i--)
 		{
@@ -2960,8 +2955,8 @@ public class AuraCanAiCore : IDisposable
 				}
 				else sb.Append("身边没有其他人; ");
 			}
-			var selfMeta = SelfRaceGender();
-			sb.Append("你:").Append(string.IsNullOrEmpty(selfMeta) ? "" : selfMeta + ",").Append(Movement.StatusText()).Append(". ");
+			// ⚠️ 只报自己的动作状态,不报种族/性别(否则模型会拿游戏数据自称,破「皮下=真人」的人设;2026-09-12 用户口径)
+			sb.Append("你:").Append(Movement.StatusText()).Append(". ");
 			sb.Append(IsInParty() ? "队伍:在小队; " : "队伍:一个人(不在小队); ");
 			// 最近一次移动结果(25 秒内),供模型理解刚才动作的成败
 			if (_lastMoveResult != null && (DateTime.Now - _lastMoveResultAt).TotalSeconds <= 25)
@@ -3248,13 +3243,36 @@ public class AuraCanAiCore : IDisposable
 		{
 			var local = _objectTable.LocalPlayer;
 			if (local == null) return "离开失败:未登录";
+			var inParty = IsInParty();
+			if (inParty) { _leaveArmed = true; _leaveLastChatAt = DateTime.Now; }
+			var tail = inParty ? $"{LeaveQuietSec:0} 秒内没人说话会自动退出小队" : "当前不在小队,无需退队";
+			return $"{WalkAwayAndSitCore()}({tail})";
+		}
+		catch (Exception e)
+		{
+			LogErr($"离开异常: {e.Message}");
+			return $"离开出错:{e.Message}";
+		}
+	}
+
+	/// <summary>走远一点 + 找个周围人少的位置坐下(公开入口,需框架线程;方法内部已编组)。
+	/// 供 AI 工具 leave_scene(退场) 与 leave_party(walk_away=true,退队后走开) 共用。</summary>
+	public string WalkAwayAndSit()
+	{
+		if (_framework.IsInFrameworkUpdateThread) return WalkAwayAndSitCore();
+		return _framework.RunOnFrameworkThread(WalkAwayAndSitCore).GetAwaiter().GetResult();
+	}
+
+	private string WalkAwayAndSitCore()
+	{
+		try
+		{
+			var local = _objectTable.LocalPlayer;
+			if (local == null) return "未登录,没法走开";
 			// 「离开」优先级最高:先停掉正在进行的移动/走位(避免走一半又走一半)
 			if (Movement.IsActive) { Movement.Stop(); Log("离开: 已中止进行中的移动"); }
 			// 走开之前先移开目光:不看任何人(也不看自己)——清空游戏目标/软目标,免得站在原地盯着人
 			ClearLook();
-			var inParty = IsInParty();
-			if (inParty) { _leaveArmed = true; _leaveLastChatAt = DateTime.Now; }
-			var tail = inParty ? $"{LeaveQuietSec:0} 秒内没人说话会自动退出小队" : "当前不在小队,无需退队";
 
 			var others = GetOtherPlayerPositions(local);
 			var nearest = others.Count == 0 ? float.MaxValue : others.Min(p => Dist2D(p, local.Position));
@@ -3264,7 +3282,7 @@ public class AuraCanAiCore : IDisposable
 			if (seat != null)
 			{
 				var msg = Movement.SitOnSeat($"#{seat.Id}");
-				if (msg.Length == 0) return $"已开始离开人群:去坐人少处的座位「{seat.Label()}」({tail})";
+				if (msg.Length == 0) return $"已开始离开人群:去坐人少处的座位「{seat.Label()}」";
 				Log($"离开: 坐座失败({msg}),改为走到空处");
 			}
 
@@ -3276,17 +3294,17 @@ public class AuraCanAiCore : IDisposable
 				{
 					var clearance = MinDistToPlayers(dest.Value, others);
 					if (Movement.MoveToPoint(dest.Value))
-						return $"已开始走向人少的地方(落脚点离最近的人约 {clearance:0.#} 米;{tail})";
+						return $"已开始走向人少的地方(落脚点离最近的人约 {clearance:0.#} 米)";
 				}
-				return $"没找到合适的落脚点,原地待着({tail})";
+				return "没找到合适的落脚点,原地待着";
 			}
 
-			return $"周围已经没什么人了,原地待着({tail})";
+			return "周围已经没什么人了,原地待着";
 		}
 		catch (Exception e)
 		{
-			LogErr($"离开异常: {e.Message}");
-			return $"离开出错:{e.Message}";
+			LogErr($"走开异常: {e.Message}");
+			return $"走开出错:{e.Message}";
 		}
 	}
 

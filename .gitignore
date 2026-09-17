@@ -1,1 +1,6 @@
 _ref/
+bin/
+obj/
+**/chatlogs/
+tools/diag-out.txt
+*.zip
