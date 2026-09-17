@@ -911,3 +911,47 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
   → `leave_scene` 与 `leave_party(walk_away=true)` **共用同一套走位逻辑**,以后改一处即可。
 - 工具目录标签:`AiToolCatalog` 里 `leave_party` 由「主动退出小队」→「主动退出小队（可选退队后走开）」。
 - **未动**:游戏内命令 `/aca party leave`(`Plugin.cs` → `PartyAction("leave","")`)仍是纯退队、不移开目光(调试命令)。
+
+# ===== 发布与仓库(2026-09-17 定稿,新会话先读这段) =====
+
+## 仓库
+
+| 仓库 | 可见性 | 是什么 |
+|---|---|---|
+| `raine01/AuraCanAI` | **public** | **本插件**(`D:\AuraCanAI.Dalamud\` 的 origin,分支 main) |
+| `raine01/AuraCanAI-legacy` | private | 旧 ACT/Triggernometry 项目(`D:\AuraCanAI\` 的 origin),2026-09-17 由 `raine01/AuraCanAI` 改名让出名字。**内含私人 RP 记录与历史密钥,永远不要公开**(详见本地全局笔记) |
+| `raine01/ff14AuraCan` | public | 旧版 Triggernometry XML(6.0~6.5.2,无密钥) |
+| `raine01/ff14AuraCanAI` | public | 7.4.2 图形页面版(无密钥) |
+
+## 分发方式:自建插件源(路线 A)
+
+- 插件源 URL:`https://raw.githubusercontent.com/raine01/AuraCanAI/main/pluginmaster.json`
+- 用户:`/xlsettings` → 插件仓库 → 自定义插件仓库填入上面 URL
+- **不**提交官方 `ottercorp/DalamudPluginsD17`:本插件含自动化功能(自动发言/自动移动/条件触发宏),
+  踩官方「**自动化,如轮询数据或在没有用户直接交互的情况下发出请求**」红线,不会被接受。这是主动选择,不是审核失败。
+- 免责声明已写进 README:本插件以自建源分发,使用风险自负。
+
+## 发布流程
+
+1. 改 `AuraCanAI.Dalamud.csproj` 的 `<Version>`(必须固定版本号,禁止时间戳/自增)
+2. `powershell -ExecutionPolicy Bypass -File tools\release.ps1 -Changelog "..."`
+   - Release 构建 → `bin/Release/AuraCanAI.Dalamud/latest.zip`
+   - 同步 `pluginmaster.json`(AssemblyVersion / 3 个下载链接 / IconUrl / RepoUrl / LastUpdate)
+   - 有 `gh` CLI 则自动建 tag + 传附件;没有则打印手动步骤
+3. 手动发布:GitHub → Releases → New release → tag `v<版本>` → 附件名**必须** `latest.zip`
+
+## 关键约束(勿破)
+
+- `pluginmaster.json` 必须**无 BOM UTF-8**。PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会加 BOM,
+  导致卫月解析 `Unexpected character`;`release.ps1` 已改用 `UTF8Encoding($false)`。
+- 三个下载链接固定用 `releases/latest/download/latest.zip`,**发版不改链接**。
+- `DalamudApiLevel` 必须跟当前卫月 API(现 **15**,本地 Dalamud 15.0.3.4)。API bump 后要改 csproj 的
+  `Dalamud.NET.Sdk` 版本 + 清单里的 API level 并重发,否则插件不被加载。
+- 仓库内不得出现 `bin/` `obj/` `chatlogs/` `tools/diag-out.txt`(`.gitignore` 已挡)。
+  插件运行时聊天记录写 DLL 同目录的 `./chatlogs`(`Models.cs` 的 `defaultFilePath`),所以它们会落在 `bin/Debug/chatlogs/`。
+- 分享前用 `git grep -I -n -E 'sk-[A-Za-z0-9_-]{20,}|gho_|ghp_' $(git rev-list --all)` 扫全历史(光删文件没用)。
+
+## 当前公开状态(待用户拍板)
+
+- `AGENTS.md`(本文件)与 `tools/` 下的调试脚本目前已随插件公开。
+  - `tools/elevated-diagnose.ps1` 仍硬编码 `D:\AuraCanAI.Dalamud\tools\diag-out.txt`;`inspect-bodyreq.js` / `test-slave-inject.ps1` 对用户无用途。
