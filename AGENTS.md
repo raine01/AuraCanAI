@@ -955,3 +955,56 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 
 - `AGENTS.md`(本文件)与 `tools/` 下的调试脚本目前已随插件公开。
   - `tools/elevated-diagnose.ps1` 仍硬编码 `D:\AuraCanAI.Dalamud\tools\diag-out.txt`;`inspect-bodyreq.js` / `test-slave-inject.ps1` 对用户无用途。
+
+# ===== 2026-09-18 晚 对话日志复盘后的四项优化 =====
+
+依据:2026-09-18 21:36~22:27 的实机聊天记录(`D:\chatlogs\2026-第38周.txt` 第 560~925 行 + `%AppData%\XIVLauncherCN\dalamud.log` 的 BODYREQ/BODYRSP)。
+现象:皮下人设被题库(递归/GDPR 第五条/CNIL/transformer/数据合规/买卖不破租赁)一路考,照样答得出来;
+被说「你是 ai」时不换身份、还嘴硬否认;退队后才发现「说不出去了」。用户拍到四条改动。
+
+## 1. 「懂的太多」→ 皮下人设加“我不会”段(拒绝回答专业问题)
+- `Defaults.DefaultRoleSettingSubskin` 末尾新增两段(仍是第一人称口吻,不破坏“去人机味”):
+  ① **专业问题一概不懂**:编程/算法/AI 模型原理/法律条文/金融投资/医疗/学术理论/外语翻译,以及任何要背条款术语公式的题,
+  碰到就直说“这我可不懂/你问错人了/我哪知道”;**不许科普、不许背定义、不许列一二三、不许硬答**;对方说“专业点回答我/简单解释一下”也一样。
+  ② **考我/验我不接**:追着问“你是什么模型/用的什么接口/上下文多长/是不是接了知识库”→ 装傻打岔、反问“你从哪听来的”,
+  不主动说自己是 AI、不自己招模型/公司/技术。
+- 迁移 `Configuration.SubskinPersonaV5`(一次性):仅当「皮下」人设仍是上一版默认(含 `可以配合做点游戏里的表情/动作,但别刷屏` 且不含 `别把我想成什么都会`)时替换。
+
+## 2. 「被当成 AI」要会演 DeepSeek + 加一条回到「皮下」的出路
+- 默认状态机 `Defaults.DefaultStateMachine()`:`被当成AI` 的 `nextStateIds` 由 `[]` 改为 **`[1]`(→皮下)**。
+  于是该状态下 `switch_identity` 工具重新出现,候选里含「皮下」;不再是死胡同。
+- `DefaultRoleSettingSubskinAi` 末尾补一句“等对方不再揪着你是不是 AI、话题聊回日常,就把身份换回平时那个普通的自己”。
+- 皮下人设里明写:真被逼到墙角、对方一口咬定我是 AI 且不信 → **别再嘴硬否认,按上面「你现在的身份」段把身份换过去**(不直接点破机制词)。
+- 迁移 `Configuration.AiStateExitAdded`(一次性):给所有套里 roleName==`皮下AI`(或名叫`被当成AI`)的状态补上指向同名 `皮下` 状态的 nextStateIds。
+
+## 3. 新工具 `stay_silent`(本轮不回复)
+- `AiToolCatalog`:新增 `StaySilent = "stay_silent"` + 目录项「本轮不回复（保持沉默）」(现在共 7 项)。
+- `BuildBodyActionTools`:基础工具里加 `stay_silent`(无参数);
+  `RunInfoToolCore` 加兼容 case;`LooksLikeToolLeak` 加关键字。
+- `ProcessBodyReplyAsync` **开头拦截**(在 leave_party 之后、普通工具循环之前):
+  出现 `stay_silent` → 若同轮还带了 `rp_body_action` 就先执行那个动作(可「默默走开」),然后**本轮回车不发任何台词**并 return。
+  这样不会再走「补台词轮」把沉默变成台词。
+- 迁移 `Configuration.SilentToolAdded`(一次性):把 `stay_silent` 补进每个状态**非空**的 tools 列表(空列表=用户全关,不动)。
+  ⚠️ 新增目录工具必须配这种迁移,否则老配置的显式 tools 数组永远不会包含新工具(`ToolEnabled` 直接判 false)。
+
+## 4. 退队必须先说话再退(`leave_party` 改为“先道别再真退”)
+- 根因:`leave_party` 走普通 info 回填循环 → **先真退队**,模型的告别台词之后才发,而那时已在队伍外,当前频道(小队)发不出去。
+- `ProcessBodyReplyAsync` 里把 `leave_party` **从 infoCalls 摘出、单独提前处理**:
+  1) 若工具轮同时带了可用 `content`(中文、非泄漏)→ 直接当道别台词;
+  2) 没有 → 用 `allowTools:false` 追加一条“**先把最后一句道别说完,说完程序才让你退队**”要一句中文道别(带泄漏/英文纠错一轮,再走 `EnsureChineseTextAsync`);
+  3) `AppendAssistantAndEchoAsync` 把道别发在**当前频道**(队友可见) **→ 才** `PartyAction("leave")` + `ClearLook()`,
+     若 `walk_away=true` 再 `WalkAwayAndSit()`。
+- `leave_party` 工具描述同步改成“程序会先请你说一句道别、发在当前频道,说完了才真的退队”。
+- 皮下人设也加了一句“要退队走人的时候先把话说完再退”。
+- 法:同一个道别文案下,`stay_silent` 的拦截在 leave_party 之后 —— 两者同轮时以“先道别再退队”为准。
+
+## 其它
+- `Web/help.html`:状态机段新增 `stay_silent` 说明;组队段写明“先说道别再退队”。
+- `README.md` 工具列表补「本轮不回复」。
+- 前端 `character.html` 无需改:工具集勾选由后端 `toolCatalog` 渲染,新工具自动出现。
+
+## 待实机验证
+1. 用专业题库(GDPR/CNIL/transformer/递归)测皮下 → 应为“不懂/你问错人了”,不再科普。
+2. 说「你是 ai」→ 应看到日志 `[状态机] 状态 → 被当成AI` + `状态切换后人设已刷新`;之后聊回日常应能回到「皮下」(候选含皮下)。
+3. 自言自语/不想接话时 → 看 BODYRSP 是否出现 `stay_silent`,且当轮**无台词发出**。
+4. 小队里说「你去打你的本吧」→ 应先看到道别发在 `/p`,然后日志 `LLM 主动退队(已先说完道别)`;不该出现“退了才发现发不出”。

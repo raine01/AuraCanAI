@@ -117,6 +117,7 @@ public static class AiToolCatalog
 	public const string SwitchIdentity = "switch_identity"; // 自动;不占工具集
 	public const string LeaveParty = "leave_party";
 	public const string LeaveScene = "leave_scene";
+	public const string StaySilent = "stay_silent"; // 本轮不回复(保持沉默)
 
 	public static readonly (string Name, string Label)[] All =
 	{
@@ -126,6 +127,7 @@ public static class AiToolCatalog
 		(RoleEmote, "做角色自定义动作"),
 		(LeaveParty, "主动退出小队（可选退队后走开）"),
 		(LeaveScene, "离开场地（退到人少处）"),
+		(StaySilent, "本轮不回复（保持沉默）"),
 	};
 
 	public static List<string> AllNames() => All.Select(x => x.Name).ToList();

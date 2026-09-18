@@ -203,6 +203,43 @@ public class AuraCanAiCore : IDisposable
 			}
 			try { config.Save(pi); } catch { }
 		}
+		// 迁移:「被当成AI」补上回「皮下」的出路(2026-09-18 用户口径:能从“被当成AI”回到“皮下”,不然一直卡在AI皮里)
+		if (!_config.AiStateExitAdded)
+		{
+			_config.AiStateExitAdded = true;
+			foreach (var set in _config.SmSets)
+			{
+				var ai = set.states.FirstOrDefault(x => x.roleName == "皮下AI" || x.name == "被当成AI");
+				var sub = set.states.FirstOrDefault(x => x.name == "皮下");
+				if (ai == null || sub == null) continue;
+				ai.nextStateIds ??= new List<int>();
+				if (!ai.nextStateIds.Contains(sub.id)) ai.nextStateIds.Add(sub.id);
+			}
+			try { config.Save(pi); } catch { }
+		}
+		// 迁移:新增「本轮不回复」工具 → 已有状态默认勾上(用户口径:新工具默认可用;空列表=用户全关,不动)
+		if (!_config.SilentToolAdded)
+		{
+			_config.SilentToolAdded = true;
+			foreach (var set in _config.SmSets)
+				foreach (var st in set.states)
+					if (st.tools is { Count: > 0 } && !st.tools.Contains(AiToolCatalog.StaySilent))
+						st.tools.Add(AiToolCatalog.StaySilent);
+			try { config.Save(pi); } catch { }
+		}
+		// 迁移:「皮下」人设加“不懂专业问题/被当成 AI 时换身份/退队先说话”一版;只改仍是上一版默认的那份
+		if (!_config.SubskinPersonaV5)
+		{
+			_config.SubskinPersonaV5 = true;
+			var sub5 = _llmSetting.roles.FirstOrDefault(r => r.name == "皮下");
+			var s5 = sub5?.setting ?? "";
+			if (sub5 != null && s5.Contains("可以配合做点游戏里的表情/动作,但别刷屏") && !s5.Contains("别把我想成什么都会"))
+			{
+				sub5.setting = Defaults.DefaultRoleSettingSubskin;
+				_config.SetLlmConfig(StripKey(_llmSetting));
+			}
+			try { config.Save(pi); } catch { }
+		}
 
 		Tts = new TtsService(config.TtsWorkers) { Enabled = config.TtsEnabled, Volume = config.TtsVolume, Rate = config.TtsRate };
 		State = new StateMachine(this, config); // 状态机(在 BehaviorEngine/ResetChatHistory 之前建,IsRolePlaying 依赖它)
@@ -2103,10 +2140,61 @@ public class AuraCanAiCore : IDisposable
 				if (!string.IsNullOrEmpty(content)) await AppendAssistantAndEchoAsync(content, channelNo, replyAddress);
 				return;
 			}
+			// 主动退队(leave_party):必须**先说话再退**——退了队当前频道就发不出去了(2026-09-18 用户口径)。
+			// 所以不走普通 info 回填循环:先拿到/补一句道别台词发在当前频道,再真正执行退队。
+			var leaveCall = calls.FirstOrDefault(c => c.name == AiToolCatalog.LeaveParty);
+			if (!string.IsNullOrEmpty(leaveCall.name))
+			{
+				bool walkAway = false;
+				try { walkAway = JObject.Parse(leaveCall.args ?? "{}")["walk_away"]?.Value<bool?>() ?? false; } catch { }
+				// 工具调用轮附带的 content 常是旁白(甚至英文),不能当台词 → 丢掉,让它好好补一句道别
+				var farewell = content;
+				if (!string.IsNullOrEmpty(farewell) && (LooksLikeToolLeak(farewell) || IsMostlyLatin(farewell))) farewell = null;
+				if (string.IsNullOrEmpty(farewell))
+				{
+					var msgs2 = new List<JObject>(msgs);
+					AppendToLastSystem(msgs2, "(你正要退出小队。**先把最后一句道别的话说完**——这句话会发在当前频道、队友看得到,说完了程序才会真的让你退队。用简体中文直接说这一句,别调用任何工具,别写标签/括号/旁白)");
+					var (c2, calls2, _) = await SendBodyChatAsync(msgs2, role, allowTools: false);
+					if (calls2.Count > 0 || (!string.IsNullOrEmpty(c2) && LooksLikeToolLeak(c2)))
+					{
+						AppendToLastSystem(msgs2, "(你刚才那条不是台词。现在只输出一句简体中文道别的话本身,不要任何工具、标签或说明)");
+						c2 = (await SendBodyChatAsync(msgs2, role, allowTools: false)).content;
+					}
+					farewell = await EnsureChineseTextAsync(msgs2, role, c2);
+				}
+				if (!string.IsNullOrEmpty(farewell)) await AppendAssistantAndEchoAsync(farewell, channelNo, replyAddress);
+				// 台词已发出 → 真正退队(先移开目光),walk_away=true 再走开找个位子坐下
+				var leaveMsg = PartyAction("leave", "");
+				ClearLook();
+				Log($"LLM 主动退队(已先说完道别): {leaveMsg};walk_away={walkAway}");
+				if (walkAway) WalkAwayAndSit();
+				return;
+			}
+
+			// 「本轮不回复」:模型可以选择这一轮什么都不说(对方自言自语/不想接话/正在忙)。
+			// 允许同时做一个身体动作(例如默默走开),但绝不会开口。
+			if (calls.Any(c => c.name == AiToolCatalog.StaySilent))
+			{
+				var silentAct = calls.FirstOrDefault(c => c.name == "rp_body_action");
+				if (!string.IsNullOrEmpty(silentAct.name))
+				{
+					try
+					{
+						var a = JObject.Parse(silentAct.args ?? "{}");
+						ExecuteBodyAction((a["action"]?.ToString() ?? "").Trim().ToLowerInvariant(),
+							(a["target"]?.ToString() ?? "").Trim(), (a["side"]?.ToString() ?? "").Trim());
+					}
+					catch { }
+				}
+				Log("LLM 选择本轮不回复(保持沉默)");
+				return;
+			}
+
 			var actionCall = calls.FirstOrDefault(c => c.name == "rp_body_action");
 			bool hasAction = !string.IsNullOrEmpty(actionCall.name);
 			// 信息/轻动作工具(查询 或 纯转身看向):face_player 也走回填循环,让模型决定之后说/动什么
-			var infoCalls = calls.Where(c => c.name is "lookup_player" or "face_player" or "rp_emote" or "leave_scene" or "switch_identity" or "leave_party").ToList();
+			// (leave_party 已在上面单独处理:必须先说道别再退队)
+			var infoCalls = calls.Where(c => c.name is "lookup_player" or "face_player" or "rp_emote" or "leave_scene" or "switch_identity").ToList();
 			if (hasAction && infoCalls.Count == 0)
 			{
 				// 纯动作轮:解析并执行
@@ -2364,6 +2452,12 @@ public class AuraCanAiCore : IDisposable
 					try { identityName = (JObject.Parse(argsJson)["identity"]?.ToString() ?? "").Trim(); } catch { }
 					return State.SwitchState(identityName).message;
 				}
+				case AiToolCatalog.StaySilent:
+				{
+					// 正常路径下这个调用在 ProcessBodyReplyAsync 开头就被拦下(整轮不发声);
+					// 这里只做兼容回执(万一从其他入口进来)。
+					return "已选择本轮不回复(保持沉默)";
+				}
 				case "leave_party":
 				{
 					var walkAway = false;
@@ -2489,6 +2583,8 @@ public class AuraCanAiCore : IDisposable
 				}, Array.Empty<string>()),
 			Func("leave_scene", "离开(退场):结束这段互动、告辞、不想再被围观时用。会走到人少的地方(有空着的椅子就坐下),之后若 60 秒没人说话会自动退出小队。调用后你可以再说一句告别的话。",
 				new JObject(), Array.Empty<string>()),
+			Func(AiToolCatalog.StaySilent, "本轮不回复(保持沉默):当对方只是在自言自语、在跟别人说话、刷屏复读,或者你就是不想接话/没什么可说的时候用。调用后这一轮不会发送任何台词。不必为了礼貌每句都回。",
+				new JObject(), Array.Empty<string>()),
 		};
 
 		// 角色自定义动作(AI 可主动执行;动作列表在前端「角色设定 → 角色管理」里配,与角色绑定)
@@ -2528,7 +2624,7 @@ public class AuraCanAiCore : IDisposable
 		// 主动离开小队(邀请/接受由程序或命令处理)。可选参数 walk_away=是否要离开(真的走开)
 		// 每次调用都会先移开目光(不再盯着对方),再视 walk_away 决定要不要走远坐下。
 		tools.Add(Func(AiToolCatalog.LeaveParty,
-			"主动退出当前小队(不想跟着队伍了、想一个人待着时用)。调用后会自动**移开目光**(不再看着对方)。可选参数 walk_away:填 true 表示退完队还要**真的走开**——走远一点、找个周围人少的位置坐下;不填/填 false 只退队,人留在原地。",
+			"主动退出当前小队(不想跟着队伍了、想一个人待着时用)。**程序会先请你说一句道别的话、发在当前频道(队友看得到),说完了才真的退队**——道别交给程序处理,别惦记着先退再发言。退队后会自动**移开目光**(不再看着对方)。可选参数 walk_away:填 true 表示退完队还要**真的走开**——走远一点、找个周围人少的位置坐下;不填/填 false 只退队,人留在原地。",
 			new JObject
 			{
 				["walk_away"] = new JObject
@@ -2657,6 +2753,7 @@ public class AuraCanAiCore : IDisposable
 		|| text.Contains("rp_body_action", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("switch_identity", StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("leave_party", StringComparison.OrdinalIgnoreCase)
+		|| text.Contains(AiToolCatalog.StaySilent, StringComparison.OrdinalIgnoreCase)
 		|| text.Contains("tool_calls", StringComparison.OrdinalIgnoreCase);
 
 	/// <summary>是否含可尝试恢复的 XML 工具块(标准 <invoke> 结构)。宽松判定,避免把正常台词误伤。</summary>
