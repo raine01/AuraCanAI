@@ -11,6 +11,7 @@ public sealed class StateMachine
 {
 	private readonly AuraCanAiCore _core;
 	private readonly Configuration _config;
+	private DateTime _enteredAt = DateTime.Now; // 当前状态是何时进入的(供 autoReturnSec 兑底)
 
 	public StateMachine(AuraCanAiCore core, Configuration config)
 	{
@@ -55,6 +56,7 @@ public sealed class StateMachine
 		if (cur != null && !allowed.Any(x => x.id == s.id))
 			return (false, $"你现在是「{cur.name}」,换不到「{s.name}」;能换成的是: {(allowed.Count > 0 ? Names(allowed, x => x.name) : "没有能换成的身份")}");
 		_config.SmCurrentStateId = s.id;
+		_enteredAt = DateTime.Now;
 		var role = string.IsNullOrEmpty(s.roleName) ? "(未设置人设,不演角色照常聊天)" : s.roleName;
 		_core.SaveConfig();
 		_core.ResetChatHistoryPublic(); // 换了状态换了人设 → 重建 system 提示
@@ -62,8 +64,8 @@ public sealed class StateMachine
 		return (true, $"已换成「{s.name}」,接下来按人设「{role}」说话");
 	}
 
-	/// <summary>强制设置为当前状态(不检查通路;供“闲置回到默认状态”等程序内部使用)。
-	/// 「被当成AI」这类状态没有出口,所以需要能绕过通路直接设。</summary>
+	/// <summary>强制设置为当前状态(不检查通路;供“闲置回到默认状态”“autoReturnSec 兜底回退”等程序内部使用)。
+	/// 会话期间模型切不过去时,程序需要能绕过通路直接设。</summary>
 	public (bool ok, string message) ForceSetState(string key)
 	{
 		var set = CurrentSet;
@@ -71,6 +73,7 @@ public sealed class StateMachine
 		var s = Match(set.states, key, x => x.name);
 		if (s == null) return (false, $"没有叫「{key}」的状态;可用: {Names(set.states, x => x.name)}");
 		_config.SmCurrentStateId = s.id;
+		_enteredAt = DateTime.Now;
 		var role = string.IsNullOrEmpty(s.roleName) ? "(未设置人设)" : s.roleName;
 		_core.SaveConfig();
 		_core.ResetChatHistoryPublic();
@@ -127,6 +130,22 @@ public sealed class StateMachine
 	/// <summary>可切换身份一览的单行版(工具描述用;条目间用 “ ; ” 隔开)。</summary>
 	public string DescribeSwitchCandidatesInline()
 		=> DescribeSwitchCandidates("").Replace("\r", " ").Replace("\n", " ; ").Trim().TrimEnd(';', ' ').Trim();
+
+	// ==================== 兜底自动回退 ====================
+
+	/// <summary>按状态配置的 autoReturnSec:滞留超时就自动切到「第一个可切换到的状态」(借现有通路)。
+	/// 供 core 的 500ms tick 调用:模型该换回去却忘了时,程序也能把它拉回来。
+	/// 没有出口(nextStateIds 空)的状态不动——不能凭空跳。</summary>
+	public void TickAutoReturn()
+	{
+		var cur = CurrentState;
+		if (cur == null || cur.autoReturnSec <= 0) return;
+		if ((DateTime.Now - _enteredAt).TotalSeconds < cur.autoReturnSec) return;
+		var target = AllowedStates().FirstOrDefault();
+		if (target == null) return;
+		var (ok, _) = ForceSetState(target.name);
+		if (ok) Plugin.Log?.Information($"[状态机] 在「{cur.name}」停留超过 {cur.autoReturnSec} 秒,已自动回到「{target.name}」");
+	}
 
 	// ==================== 工具 ====================
 

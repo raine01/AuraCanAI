@@ -95,7 +95,8 @@ public class SmSet
 }
 
 /// <summary>角色状态(单层状态机的一个节点)。
-/// roleName = 该状态用的人设;nextStateIds = 允许切换到的状态(单向;空 = 不能切到别的状态);tools = 可用工具集。</summary>
+/// roleName = 该状态用的人设;nextStateIds = 允许切换到的状态(单向;空 = 不能切到别的状态);tools = 可用工具集;
+/// autoReturnSec &gt; 0 = 在该状态停留超过这么多秒后,自动切到第一个可切换到的状态(0 = 不自动回)。</summary>
 public class SmState
 {
 	public int id { get; set; }
@@ -104,6 +105,7 @@ public class SmState
 	public string roleName { get; set; } = ""; // 该状态使用的人设(角色设定里的角色名;空 = 不演角色,照常聊天)
 	public List<int> nextStateIds { get; set; } = new(); // 允许切换到的状态(**单向**:只列出从这里能切过去的状态)
 	public List<string> tools { get; set; } = new(); // 该状态下 AI 可用的工具名(空 = 全开);见 AiToolCatalog
+	public int autoReturnSec { get; set; } // 自动回退秒数:滞留超时后回到第一个可切换到的状态(0=不自动回;用于“模型忘了换回去”的兜底)
 }
 
 /// <summary>AI 可用工具目录(状态机里按状态勾选“这个状态下允许用哪些工具”;空 = 全开)。
