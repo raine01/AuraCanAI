@@ -3,8 +3,8 @@
     "Author": "ThousanRaine",
     "Name": "AuraCanAI",
     "InternalName": "AuraCanAI.Dalamud",
-    "AssemblyVersion": "0.1.0.0",
-    "Description": "AuraCanAI 鍗湀鎻掍欢鐗?娓告垙鍐?AI 瑙掕壊鎵紨鍔╂墜銆傛彁渚涙湰鍦扮綉椤垫帶鍒跺彴(localhost:8051),鏀寔 DeepSeek 澶фā鍨嬭鑹叉壆婕斻€佽亰澶╄闊虫彁绀?TTS)銆佺帺瀹惰繘鍑?娉ㄨ鎻愰啋銆佽亰澶╄褰曞綊妗ｄ笌鍏ㄦ枃妫€绱€佺帺瀹跺娉ㄣ€侀檮杩戠帺瀹朵笌娲荤偣鍦板浘銆佽涓鸿缃€丮IDI 婕斿涓庡弻寮€鍚堝銆佺Щ鍔ㄥ唴鏍搞€傛寚浠?/aca",
+    "AssemblyVersion": "0.2.0.0",
+    "Description": "AuraCanAI 閸楊偅婀€閹绘帊娆㈤悧?濞撳憡鍨欓崘?AI 鐟欐帟澹婇幍顔界川閸斺晜澧滈妴鍌涘絹娓氭稒婀伴崷鎵秹妞ゅ灚甯堕崚璺哄酱(localhost:8051),閺€顖涘瘮 DeepSeek 婢堆勀侀崹瀣潡閼瑰弶澹嗗鏂烩偓浣戒喊婢垛晞顕㈤棅铏絹缁€?TTS)閵嗕胶甯虹€规儼绻橀崙?濞夈劏顫嬮幓鎰板晪閵嗕浇浜版径鈺勵唶瑜版洖缍婂锝勭瑢閸忋劍鏋冨Λ鈧槐顫偓浣哄负鐎硅泛顦▔銊ｂ偓渚€妾潻鎴犲负鐎规湹绗屽ú鑽ゅ仯閸︽澘娴橀妴浣筋攽娑撻缚顔曠純顔衡偓涓甀DI 濠曟柨顨旀稉搴″蓟瀵偓閸氬牆顨旈妴浣盒╅崝銊ュ敶閺嶆悶鈧倹瀵氭禒?/aca",
     "ApplicableVersion": "any",
     "Tags": [
       "AuraCan",
@@ -15,7 +15,7 @@
     ],
     "DalamudApiLevel": 15,
     "RepoUrl": "https://github.com/raine01/AuraCanAI",
-    "Punchline": "娓告垙鍐?AI 瑙掕壊鎵紨鍔╂墜:鏈湴缃戦〉鎺у埗鍙?+ LLM + TTS + 鑱婂ぉ璁板綍",
+    "Punchline": "濞撳憡鍨欓崘?AI 鐟欐帟澹婇幍顔界川閸斺晜澧?閺堫剙婀寸純鎴︺€夐幒褍鍩楅崣?+ LLM + TTS + 閼卞﹤銇夌拋鏉跨秿",
     "LoadRequiredState": 0,
     "LoadSync": false,
     "CanUnloadAsync": false,
@@ -27,6 +27,6 @@
     "DownloadLinkUpdate": "https://github.com/raine01/AuraCanAI/releases/latest/download/latest.zip",
     "DownloadLinkTesting": "https://github.com/raine01/AuraCanAI/releases/latest/download/latest.zip",
     "IconUrl": "https://raw.githubusercontent.com/raine01/AuraCanAI/main/images/icon.png",
-    "LastUpdate": 1789646430
+    "LastUpdate": 1789743193
   }
 ]
