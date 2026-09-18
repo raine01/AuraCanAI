@@ -974,6 +974,7 @@ node tools/inspect-bodyreq.js 3 7    # 额外打印最后一条里 message[7] �
 - 默认状态机 `Defaults.DefaultStateMachine()`:`被当成AI` 的 `nextStateIds` 由 `[]` 改为 **`[1]`(→皮下)**。
   于是该状态下 `switch_identity` 工具重新出现,候选里含「皮下」;不再是死胡同。
 - `DefaultRoleSettingSubskinAi` 末尾补一句“等对方不再揪着你是不是 AI、话题聊回日常,就把身份换回平时那个普通的自己”。
+- 迁移 `Configuration.SubskinAiPersonaV2`(一次性):仅当「皮下AI」人设仍是旧默认(含 `顺着他来` 且不含 `话题聊回日常`)时替换。
 - 皮下人设里明写:真被逼到墙角、对方一口咬定我是 AI 且不信 → **别再嘴硬否认,按上面「你现在的身份」段把身份换过去**(不直接点破机制词)。
 - 迁移 `Configuration.AiStateExitAdded`(一次性):给所有套里 roleName==`皮下AI`(或名叫`被当成AI`)的状态补上指向同名 `皮下` 状态的 nextStateIds。
 

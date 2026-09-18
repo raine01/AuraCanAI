@@ -240,6 +240,19 @@ public class AuraCanAiCore : IDisposable
 			}
 			try { config.Save(pi); } catch { }
 		}
+		// 迁移:「皮下AI」补上“等对方聊回日常就换回皮下”的出口提示(配合状态出路)
+		if (!_config.SubskinAiPersonaV2)
+		{
+			_config.SubskinAiPersonaV2 = true;
+			var ai2 = _llmSetting.roles.FirstOrDefault(r => r.name == "皮下AI");
+			var sa2 = ai2?.setting ?? "";
+			if (ai2 != null && sa2.Contains("顺着他来") && !sa2.Contains("话题聊回日常"))
+			{
+				ai2.setting = Defaults.DefaultRoleSettingSubskinAi;
+				_config.SetLlmConfig(StripKey(_llmSetting));
+			}
+			try { config.Save(pi); } catch { }
+		}
 
 		Tts = new TtsService(config.TtsWorkers) { Enabled = config.TtsEnabled, Volume = config.TtsVolume, Rate = config.TtsRate };
 		State = new StateMachine(this, config); // 状态机(在 BehaviorEngine/ResetChatHistory 之前建,IsRolePlaying 依赖它)

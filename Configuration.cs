@@ -60,6 +60,7 @@ public class Configuration : IPluginConfiguration
 	public bool SubskinPersonaV3 { get; set; } // 迁移标记:已把「皮下」人设加上“少提问”等微调
 	public bool SubskinPersonaV4 { get; set; } // 迁移标记:已把「皮下」人设改成第一人称碎片自述(去人机味)
 	public bool SubskinPersonaV5 { get; set; } // 迁移标记:已给「皮下」加上“不懂专业问题/被当成AI时换身份/退队先说话”一版
+	public bool SubskinAiPersonaV2 { get; set; } // 迁移标记:已给「皮下AI」加上“聊回日常就换回皮下”的出口提示
 	public bool AiStateAdded { get; set; } // 迁移标记:已补上「被当成AI」状态与「皮下AI」人设
 	public bool AiStateExitAdded { get; set; } // 迁移标记:已给「被当成AI」状态补上回「皮下」的出路
 	public bool SilentToolAdded { get; set; } // 迁移标记:已把「本轮不回复」工具补进各状态的工具集
