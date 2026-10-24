@@ -31,7 +31,7 @@ function Fail($m) { Write-Host "[release] $m" -ForegroundColor Red; exit 1 }
 # ---------- 1. 读版本 ----------
 $csprojPath = Join-Path $root "AuraCanAI.Dalamud.csproj"
 if (-not (Test-Path $csprojPath)) { Fail "找不到 csproj: $csprojPath" }
-$csprojText = Get-Content $csprojPath -Raw
+$csprojText = [System.IO.File]::ReadAllText($csprojPath, (New-Object System.Text.UTF8Encoding($false)))
 $m = [regex]::Match($csprojText, '<Version>\s*([^<\s]+)\s*</Version>')
 if (-not $m.Success) { Fail "csproj 里没找到 <Version>" }
 $version = $m.Groups[1].Value
@@ -52,7 +52,9 @@ Info ("产物: {0} ({1:N0} KB)" -f $zip, ((Get-Item $zip).Length / 1KB))
 # ---------- 3. 同步 pluginmaster.json ----------
 $pmPath = Join-Path $root "pluginmaster.json"
 if (-not (Test-Path $pmPath)) { Fail "找不到 pluginmaster.json" }
-$pm = Get-Content $pmPath -Raw
+# 必须按 UTF-8 读:PS 5.1 的 Get-Content 会按系统 ANSI(GBK) 解码,把中文读成乱码并写坏 JSON
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$pm = [System.IO.File]::ReadAllText($pmPath, $utf8NoBom)
 $dl  = "https://github.com/$Repo/releases/latest/download/latest.zip"
 $ico = "https://raw.githubusercontent.com/$Repo/main/images/icon.png"
 $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
@@ -68,7 +70,6 @@ $pm = [regex]::Replace($pm, '"LastUpdate"\s*:\s*\d+',                   '"LastUp
 # 校验是合法 JSON
 try { $null = $pm | ConvertFrom-Json } catch { Fail "pluginmaster.json 生成了非法 JSON: $_" }
 # 必须写成无 BOM 的 UTF-8:带 BOM 的 JSON 会让卫月解析报 Unexpected character
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($pmPath, $pm, $utf8NoBom)
 Info "pluginmaster.json 已同步(AssemblyVersion=$version, LastUpdate=$now)"
 

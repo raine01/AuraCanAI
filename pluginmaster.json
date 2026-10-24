@@ -3,8 +3,8 @@
     "Author": "ThousanRaine",
     "Name": "AuraCanAI",
     "InternalName": "AuraCanAI.Dalamud",
-    "AssemblyVersion": "0.2.0.0",
-    "Description": "AuraCanAI 閸楊偅婀€閹绘帊娆㈤悧?濞撳憡鍨欓崘?AI 鐟欐帟澹婇幍顔界川閸斺晜澧滈妴鍌涘絹娓氭稒婀伴崷鎵秹妞ゅ灚甯堕崚璺哄酱(localhost:8051),閺€顖涘瘮 DeepSeek 婢堆勀侀崹瀣潡閼瑰弶澹嗗鏂烩偓浣戒喊婢垛晞顕㈤棅铏絹缁€?TTS)閵嗕胶甯虹€规儼绻橀崙?濞夈劏顫嬮幓鎰板晪閵嗕浇浜版径鈺勵唶瑜版洖缍婂锝勭瑢閸忋劍鏋冨Λ鈧槐顫偓浣哄负鐎硅泛顦▔銊ｂ偓渚€妾潻鎴犲负鐎规湹绗屽ú鑽ゅ仯閸︽澘娴橀妴浣筋攽娑撻缚顔曠純顔衡偓涓甀DI 濠曟柨顨旀稉搴″蓟瀵偓閸氬牆顨旈妴浣盒╅崝銊ュ敶閺嶆悶鈧倹瀵氭禒?/aca",
+    "AssemblyVersion": "0.2.1.0",
+    "Description": "AuraCanAI 卫月插件版:游戏内 AI 角色扮演助手。提供本地网页控制台(localhost:8051,同局域网设备可用本机 IP 访问),支持 DeepSeek 大模型角色扮演、聊天语音提示(TTS)、玩家进出/注视提醒、聊天记录归档与全文检索、玩家备注、附近玩家与活点地图、行为设置、MIDI 演奏与双开合奏、移动内核。指令:/aca",
     "ApplicableVersion": "any",
     "Tags": [
       "AuraCan",
@@ -15,7 +15,7 @@
     ],
     "DalamudApiLevel": 15,
     "RepoUrl": "https://github.com/raine01/AuraCanAI",
-    "Punchline": "濞撳憡鍨欓崘?AI 鐟欐帟澹婇幍顔界川閸斺晜澧?閺堫剙婀寸純鎴︺€夐幒褍鍩楅崣?+ LLM + TTS + 閼卞﹤銇夌拋鏉跨秿",
+    "Punchline": "游戏内 AI 角色扮演助手:本地网页控制台 + LLM + TTS + 聊天记录",
     "LoadRequiredState": 0,
     "LoadSync": false,
     "CanUnloadAsync": false,
@@ -27,6 +27,6 @@
     "DownloadLinkUpdate": "https://github.com/raine01/AuraCanAI/releases/latest/download/latest.zip",
     "DownloadLinkTesting": "https://github.com/raine01/AuraCanAI/releases/latest/download/latest.zip",
     "IconUrl": "https://raw.githubusercontent.com/raine01/AuraCanAI/main/images/icon.png",
-    "LastUpdate": 1789743193
+    "LastUpdate": 1792818568
   }
 ]

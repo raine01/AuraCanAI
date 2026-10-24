@@ -125,8 +125,8 @@ public class HttpServer : IDisposable
 		try
 		{
 			_listener = new HttpListener();
-			// 只绑定 localhost,避免需要管理员权限(URLACL)
-			_listener.Prefixes.Add($"http://localhost:{_port}/");
+			// 绑定所有网卡(局域网可访问);需要一次管理员授权 URLACL:netsh http add urlacl url=http://+:{端口}/ user=Everyone
+			_listener.Prefixes.Add($"http://+:{_port}/");
 			_listener.Start();
 			_running = true;
 			_ = Task.Run(AcceptLoop);
