@@ -77,6 +77,8 @@ public class HttpServer : IDisposable
 		_methods["SetCurrentStateMachine"] = _core.SetCurrentStateMachineJson;
 		_methods["SetStateMachineEnabled"] = _core.SetStateMachineEnabledJson;
 		_methods["SwitchStateMachine"] = _core.SwitchStateMachineJson;
+		_methods["SetPlayerStatus"] = _core.SetPlayerStatusJson;
+		_methods["GetPlayerStatus"] = _ => _core.GetPlayerStatusJson();
 		LoadStaticPages();
 	}
 

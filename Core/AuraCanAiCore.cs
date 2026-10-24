@@ -3829,6 +3829,7 @@ public class AuraCanAiCore : IDisposable
 			var json = JObject.Parse(messageJson);
 			var channel = json["channel"]?.ToString();
 			var msg = json["msg"]?.ToString();
+			EnsureOnlineBeforeSend(); // 处于「离开」时先切回在线
 			var ok = SendMessageToChannel(channel ?? "", msg ?? "");
 			return ok
 				? new { message = "发送成功", result = "success" }
@@ -3857,6 +3858,7 @@ public class AuraCanAiCore : IDisposable
 				var world = GetLocalWorldName();
 				if (!string.IsNullOrEmpty(world)) name = $"{name}@{world}";
 			}
+			EnsureOnlineBeforeSend(); // 处于「离开」时先切回在线
 			var ok = RunCommand("/t", $"{name} {msg}");
 			return ok
 				? new { message = "发送成功", result = "success" }
@@ -3867,6 +3869,57 @@ public class AuraCanAiCore : IDisposable
 			LogErr($"SendTell 接口异常(已捕获): {e}");
 			return new { message = "回复失败:参数异常", result = "error" };
 		}
+	}
+
+	/// <summary>发消息前:若处于「离开」状态,先切回在线(网页发消息时自动处理)</summary>
+	private void EnsureOnlineBeforeSend()
+	{
+		try
+		{
+			if (!IsPlayerAway()) return;
+			Log("发送前处于「离开」状态,先切回在线");
+			RunCommandPublic("/离开 关");
+		}
+		catch (Exception e) { LogErr($"切回在线状态失败: {e.Message}"); }
+	}
+
+	/// <summary>网页「在线/离开/忙碌」按钮:下发对应指令(在线=/离开 关,离开=/离开 开,忙碌=/忙碌 开)</summary>
+	public object SetPlayerStatusJson(string bodyJson)
+	{
+		try
+		{
+			var status = (JObject.Parse(bodyJson)["status"]?.ToString() ?? "").Trim().ToLowerInvariant();
+			var cmd = status switch
+			{
+				"online" => "/离开 关",
+				"away" => "/离开 开",
+				"busy" => "/忙碌 开",
+				_ => ""
+			};
+			if (cmd == "") return new { message = "未知状态", result = "error" };
+			var ok = RunCommandPublic(cmd);
+			if (!ok) return new { message = "切换失败:游戏未就绪或未登录(详见 /xllog)", result = "error" };
+			Log($"网页切换在线状态: {cmd}");
+			return new { message = cmd, result = "success", status = GetMyStatusKey(), statusName = GetMyStatusName() };
+		}
+		catch (Exception e)
+		{
+			LogErr($"SetPlayerStatus 接口异常(已捕获): {e}");
+			return new { message = "切换失败:参数异常", result = "error" };
+		}
+	}
+
+	/// <summary>当前在线状态(online/away/busy),供网页按钮高亮</summary>
+	public object GetPlayerStatusJson()
+		=> new { result = "success", status = GetMyStatusKey(), statusName = GetMyStatusName() };
+
+	/// <summary>把游戏在线状态名归成 online / away / busy 三档</summary>
+	private string GetMyStatusKey()
+	{
+		var name = GetMyStatusName();
+		if (name == "离开") return "away";
+		if (name.Contains("忙碌") || name.Contains("请勿打扰")) return "busy";
+		return "online";
 	}
 
 	/// <summary>本地玩家所在服务器名(如 红玉海),用于 /t 兜底补全</summary>
