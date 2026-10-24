@@ -1658,8 +1658,24 @@ public class AuraCanAiCore : IDisposable
 		catch (Exception e) { LogErr($"look 选中目标失败: {e.Message}"); return false; }
 	}
 
-	/// <summary>我的在线状态中文名(如「角色扮演中」;未登录/无状态返回空串)</summary>
+	/// <summary>我的在线状态中文名(如「角色扮演中」;未登录/无状态返回空串)。
+	/// ⚠ ObjectTable 只能框架线程访问,网页接口(HTTP 线程)调用时必须转发。</summary>
 	public string GetMyStatusName()
+	{
+		try
+		{
+			if (_framework.IsInFrameworkUpdateThread) return ReadMyStatusName();
+			return _framework.RunOnFrameworkThread(ReadMyStatusName).GetAwaiter().GetResult();
+		}
+		catch (Exception e)
+		{
+			LogErr($"读取在线状态失败: {e.Message}");
+			return "";
+		}
+	}
+
+	/// <summary>框架线程内读在线状态名</summary>
+	private string ReadMyStatusName()
 	{
 		var local = _objectTable.LocalPlayer;
 		if (local == null) return "";
@@ -1667,12 +1683,7 @@ public class AuraCanAiCore : IDisposable
 	}
 
 	/// <summary>我的在线状态是否为「离开」(AFK 离开状态)。行为「离开时不触发」判断用。</summary>
-	public bool IsPlayerAway()
-	{
-		var local = _objectTable.LocalPlayer;
-		if (local == null) return false;
-		return GetOnlineStatusName(local.OnlineStatus.RowId) == "离开";
-	}
+	public bool IsPlayerAway() => GetMyStatusName() == "离开";
 
 	/// <summary>当前生效的角色名:
 	///   状态机开启 → 当前状态绑定的人设(roleName);
@@ -3879,6 +3890,12 @@ public class AuraCanAiCore : IDisposable
 			if (!IsPlayerAway()) return;
 			Log("发送前处于「离开」状态,先切回在线");
 			RunCommandPublic("/离开 关");
+			// 状态要过一帧才反映到对象表里,等一下再发,避免对方看到的还是「离开」
+			for (var i = 0; i < 15; i++)
+			{
+				Thread.Sleep(100);
+				if (!IsPlayerAway()) break;
+			}
 		}
 		catch (Exception e) { LogErr($"切回在线状态失败: {e.Message}"); }
 	}
@@ -3900,6 +3917,12 @@ public class AuraCanAiCore : IDisposable
 			var ok = RunCommandPublic(cmd);
 			if (!ok) return new { message = "切换失败:游戏未就绪或未登录(详见 /xllog)", result = "error" };
 			Log($"网页切换在线状态: {cmd}");
+			// 状态要过一帧才反映到对象表,等一下再回实际状态(刚切就切换也看不到新值)
+			for (var i = 0; i < 10; i++)
+			{
+				if (GetMyStatusKey() == status) break;
+				Thread.Sleep(100);
+			}
 			return new { message = cmd, result = "success", status = GetMyStatusKey(), statusName = GetMyStatusName() };
 		}
 		catch (Exception e)

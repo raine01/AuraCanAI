@@ -3,7 +3,7 @@
     "Author": "ThousanRaine",
     "Name": "AuraCanAI",
     "InternalName": "AuraCanAI.Dalamud",
-    "AssemblyVersion": "0.2.2.0",
+    "AssemblyVersion": "0.2.2.1",
     "Description": "AuraCanAI 卫月插件版:游戏内 AI 角色扮演助手。提供本地网页控制台(localhost:8051,同局域网设备可用本机 IP 访问),支持 DeepSeek 大模型角色扮演、聊天语音提示(TTS)、玩家进出/注视提醒、聊天记录归档与全文检索、玩家备注、附近玩家与活点地图、行为设置、MIDI 演奏与双开合奏、移动内核。指令:/aca",
     "ApplicableVersion": "any",
     "Tags": [
@@ -27,6 +27,6 @@
     "DownloadLinkUpdate": "https://github.com/raine01/AuraCanAI/releases/latest/download/latest.zip",
     "DownloadLinkTesting": "https://github.com/raine01/AuraCanAI/releases/latest/download/latest.zip",
     "IconUrl": "https://raw.githubusercontent.com/raine01/AuraCanAI/main/images/icon.png",
-    "LastUpdate": 1792820085
+    "LastUpdate": 1792821201
   }
 ]
